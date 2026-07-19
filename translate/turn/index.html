@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Turn Translator — speak, tap, the other answers | AnotherPart</title>
+    <meta
+      name="description"
+      content="Put the phone between you: speak, tap the button, the other person answers in their language. Free instant voice translator in your browser, no sign-in." />
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <div class="ap-shell">
+      <nav class="ap-nav" data-active="translators"></nav>
+
+      <main class="ap-main">
+        <div class="ap-stage">
+        <div class="ap-turn">
+          <div class="ap-turn-langs">
+            <select id="langA" class="ap-select"></select>
+            <span class="ap-status-muted">⇄</span>
+            <select id="langB" class="ap-select"></select>
+          </div>
+
+          <div id="engineStatus" class="ap-status-muted" style="text-align: center"></div>
+
+          <div id="said" class="ap-turn-said"></div>
+          <div id="heard" class="ap-turn-heard"></div>
+
+          <button id="turnButton" class="ap-turn-button ap-turn-live">
+            🎤 Tap and speak
+          </button>
+
+          <button id="stopButton" class="ap-turn-small" hidden>
+            stop the translator
+          </button>
+
+          <div id="history" class="ap-turn-history"></div>
+        </div>
+        </div>
+
+        <div class="ap-footer">
+          instant online translator — audio goes to your browser vendor
+          while listening · free, no sign-in ·
+          <a href="/translate/">other translators</a>
+        </div>
+      </main>
+
+      <aside class="ap-ads">
+        <div class="ap-ad-slot">ad</div>
+      </aside>
+    </div>
+
+    <script type="module" src="/src/nav.ts"></script>
+    <script type="module" src="/src/turn.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,545 @@
+/* AnotherPart.Com — the family look, inherited from .Me.
+   Columns run to the BOTTOM of the screen (Vasily, 2026-07-18):
+   left — brand + categories, center — the tool, right — ads.
+   Mobile-first minimalism: opened — talking. */
+
+:root {
+  --ap-bg-1: #040712;
+  --ap-bg-2: #0b1433;
+  --ap-panel: rgba(8, 14, 28, 0.82);
+  --ap-border: rgba(132, 172, 255, 0.22);
+  --ap-text: #e8f0ff;
+  --ap-muted: #94a7cc;
+  --ap-accent: #72bbff;
+  --ap-green: #7ee2a8;
+  --ap-green-strong: #35c46f;
+  --ap-amber: #ffd36b;
+  --ap-orange: #ff9d5c;
+  --ap-red: #ff6b6b;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* The gradient lives on BODY only, no-repeat, with the flat dark as
+   the fallback everywhere beyond — no stray blue band, no phantom
+   scrollbar seam. */
+html {
+  margin: 0;
+  background: var(--ap-bg-1);
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at top, rgba(74, 114, 255, 0.24), transparent 35%),
+    linear-gradient(180deg, var(--ap-bg-2), var(--ap-bg-1));
+  background-repeat: no-repeat;
+  background-color: var(--ap-bg-1);
+  color: var(--ap-text);
+}
+
+body {
+  font-family: 'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 15px;
+  line-height: 1.45;
+}
+
+a {
+  color: var(--ap-accent);
+}
+
+/* ---- The .Me grid, ONE TO ONE (app.component.css of the lab):
+   grid-gap 3px over a black container = the thin separators;
+   portrait: rows 147px / 1fr / 147px (top and bottom strips EQUAL);
+   landscape: columns 147px / 1fr / 210px;
+   panels: linear-gradient(180deg, rgba(10,16,28,.58), rgba(2,6,14,.72)). */
+
+/* THE .Me GRID — the FINAL recipe from the END of the lab's
+   app.component.css (the !important layer that actually renders):
+   144px bands, a 1px light-grey gap as the separator, panels shaded
+   dark → silver toward the outer edge. */
+
+.ap-shell {
+  display: grid;
+  width: 100%;
+  /* .Me literal: the app fills the screen EXACTLY — the page never
+     scrolls; overflow lives inside the stage panel. */
+  height: 100vh;
+  overflow: hidden;
+  grid-gap: 1px;
+  background: rgba(150, 170, 180, 0.3);
+  grid-template-rows: 144px minmax(0, 1fr) 144px;
+  grid-template-columns: 1fr;
+  grid-template-areas:
+    't'
+    'i'
+    'a';
+}
+
+/* The tool STAGE — the outlined panel HUGS its content (Vasily,
+   2026-07-18: «панель прижата к контенту, симметричность полная»):
+   height = the elements inside, centered in the free space between
+   the mark and the footer; taller than the screen allows → its OWN
+   scrollbar appears. */
+.ap-stage {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  /* THE CONSENT-CARD RECIPE — the first door of Мечтатели, literal
+     (.Me app.component.css .consent-card): cyan border, deep glass,
+     the double glow — outside and within. */
+  border: 1px solid rgba(120, 230, 255, 0.42);
+  background: rgba(3, 12, 24, 0.88);
+  box-shadow:
+    0 0 32px rgba(80, 210, 255, 0.22),
+    inset 0 0 24px rgba(80, 210, 255, 0.06);
+  border-radius: 12px;
+  padding: 28px;
+  /* Auto margins split the free space equally — true centering. */
+  margin: auto 0;
+}
+
+.ap-stage > * {
+  width: 100%;
+  flex-shrink: 0;
+}
+
+.ap-nav,
+.ap-ads {
+  padding: 10px;
+  background: linear-gradient(
+    90deg,
+    rgba(4, 10, 18, 0.98) 0%,
+    rgba(10, 18, 30, 0.95) 62%,
+    rgba(148, 154, 162, 0.15) 100%
+  );
+}
+
+.ap-nav {
+  grid-area: t;
+}
+
+.ap-ads {
+  grid-area: a;
+}
+
+@media screen and (orientation: landscape) {
+  .ap-shell {
+    grid-template-rows: 1fr;
+    /* 160: symmetric, wide enough for the menu to live INSIDE the
+       column without crossing the separator (Vasily, 2026-07-18). */
+    grid-template-columns: 160px minmax(0, 1fr) 160px;
+    grid-template-areas: 't i a';
+  }
+
+  .ap-nav,
+  .ap-ads {
+    background: linear-gradient(
+      180deg,
+      rgba(4, 10, 18, 0.98),
+      rgba(10, 18, 30, 0.95) 62%,
+      rgba(148, 154, 162, 0.15)
+    );
+  }
+}
+
+.ap-main {
+  grid-area: i;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  /* .Me literal: #canvasImg { background: #000 }. */
+  background: #000;
+  padding: 14px 22px 18px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+/* The neon mark at the top of the stage — every screen (Vasily,
+   2026-07-18: «пусть будет здесь тоже AnotherPart и неон тоже»). */
+.ap-main-mark {
+  align-self: center;
+  width: auto !important;
+  font-size: 22px;
+  letter-spacing: 0.42em;
+  margin-bottom: 12px;
+}
+
+.ap-footer {
+  margin-top: 12px;
+}
+
+/* Everything in the middle auto-centers at a readable width. */
+.ap-main > * {
+  width: 100%;
+  max-width: 680px;
+}
+
+.ap-ad-slot {
+  height: 100%;
+  min-height: 0;
+}
+
+/* ---- Left column: brand + categories ---- */
+
+/* THE NEON BRAND — the .Me HALL recipe (ap-hall-mark), sized for
+   the band. Click = home; the glint sweeps, the glow breathes. */
+.ap-brand-neon {
+  display: inline-block;
+  text-decoration: none;
+  border: none;
+  background: linear-gradient(
+    100deg,
+    rgba(120, 215, 245, 0.55) 0%,
+    rgba(235, 253, 255, 1) 12%,
+    rgba(120, 215, 245, 0.55) 24%,
+    rgba(120, 215, 245, 0.55) 100%
+  );
+  background-size: 260% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  transform: translateZ(0);
+  will-change: background-position;
+  font-family: Consolas, monospace;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  padding: 2px 2px 6px;
+  cursor: pointer;
+  white-space: nowrap;
+  filter: drop-shadow(0 0 8px rgba(80, 210, 255, 0.35));
+  animation:
+    ap-neon-sweep 6.5s linear infinite,
+    ap-neon-breath 6.5s ease-in-out infinite;
+  transition: transform 140ms ease;
+}
+
+.ap-brand-neon:hover {
+  transform: scale(1.05);
+}
+
+@keyframes ap-neon-sweep {
+  0% { background-position: 130% 0; }
+  100% { background-position: -130% 0; }
+}
+
+@keyframes ap-neon-breath {
+  0%, 100% { filter: drop-shadow(0 0 8px rgba(80, 210, 255, 0.3)); }
+  50% { filter: drop-shadow(0 0 18px rgba(110, 230, 255, 0.65)); }
+}
+
+/* The current category — the menu button under the brand. */
+.ap-menu-trigger {
+  display: block;
+  background: none;
+  border: none;
+  padding: 0;
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--ap-muted);
+  cursor: pointer;
+}
+
+.ap-menu-trigger:hover {
+  color: var(--ap-text);
+}
+
+/* Category buttons — the EXACT .Me dock-button recipe (styles.css
+   of the lab): dark cyan glass, cyan border, double glow. */
+.ap-cat {
+  display: block;
+  color: rgba(238, 255, 250, 0.96);
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  background: rgba(3, 14, 24, 0.88);
+  border: 1px solid rgba(120, 230, 255, 0.58);
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin-bottom: 10px;
+  box-shadow:
+    0 0 18px rgba(0, 245, 255, 0.1),
+    inset 0 0 12px rgba(0, 245, 255, 0.04);
+  transition:
+    border-color 140ms ease,
+    box-shadow 140ms ease,
+    background 140ms ease;
+}
+
+.ap-cat:hover {
+  background: rgba(8, 28, 42, 0.96);
+  border-color: rgba(160, 255, 240, 0.78);
+}
+
+.ap-cat.ap-cat-active {
+  color: var(--ap-green);
+  border-color: var(--ap-green-strong);
+  box-shadow:
+    0 0 18px rgba(53, 196, 111, 0.28),
+    inset 0 0 12px rgba(53, 196, 111, 0.08);
+}
+
+.ap-cat.ap-cat-soon {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+@media (max-width: 860px) {
+  .ap-nav {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 4px 16px;
+  }
+
+  .ap-brand-name {
+    margin-bottom: 0;
+    margin-right: 8px;
+  }
+}
+
+/* Vertical centering for intro-style pages. */
+.ap-vcenter {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.ap-vcenter > * {
+  width: 100%;
+}
+
+/* ---- The dropdown menu under the brand ---- */
+
+.ap-menu-wrap {
+  position: relative;
+}
+
+.ap-menu-button {
+  width: 100%;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+}
+
+/* The menu lives INSIDE its column — never crosses the separator. */
+.ap-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  width: 138px;
+  z-index: 30;
+  background: rgba(4, 10, 20, 0.97);
+  border: 1px solid rgba(120, 230, 255, 0.4);
+  border-radius: 12px;
+  padding: 8px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.6);
+}
+
+.ap-menu .ap-cat {
+  margin-bottom: 8px;
+  padding: 8px 10px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.ap-menu .ap-cat:last-child {
+  margin-bottom: 0;
+}
+
+/* ---- Center ---- */
+
+.ap-page-title {
+  font-size: 19px;
+  font-weight: 700;
+  margin: 4px 0 2px;
+}
+
+.ap-page-sub {
+  color: var(--ap-muted);
+  font-size: 13px;
+  margin: 0 0 14px;
+}
+
+.ap-panel {
+  background: var(--ap-panel);
+  border: 1px solid var(--ap-border);
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 14px;
+}
+
+/* ---- Tool cards (category listings) ---- */
+
+.ap-tool-card {
+  display: block;
+  text-decoration: none;
+  color: inherit;
+  background: var(--ap-panel);
+  border: 1px solid var(--ap-border);
+  border-radius: 12px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+  transition: border-color 140ms ease;
+}
+
+.ap-tool-card:hover {
+  border-color: var(--ap-accent);
+  box-shadow: 0 0 12px rgba(114, 187, 255, 0.35);
+}
+
+.ap-tool-card.ap-soon {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+.ap-tool-name {
+  font-size: 16px;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+
+.ap-tool-line {
+  color: var(--ap-muted);
+  font-size: 13px;
+}
+
+.ap-plus { color: var(--ap-green); }
+.ap-minus { color: var(--ap-orange); }
+
+/* ---- Statuses (the traffic-light law) ---- */
+
+.ap-status-ready { color: var(--ap-green); font-size: 13px; }
+.ap-status-busy { color: var(--ap-amber); font-size: 13px; }
+.ap-status-bad { color: var(--ap-red); font-size: 13px; }
+.ap-status-muted { color: var(--ap-muted); font-size: 13px; }
+
+/* ---- The TURN tool (phone lies between two people) ---- */
+
+.ap-turn {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  /* The tool cluster floats to the MIDDLE of the screen («5 в
+     середину») — the footer stays pinned at the bottom. */
+  justify-content: center;
+  gap: 12px;
+}
+
+.ap-turn-langs {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  align-items: center;
+}
+
+select {
+  font: inherit;
+}
+
+.ap-select {
+  background: rgba(0, 34, 48, 0.58);
+  color: var(--ap-text);
+  border: 1px solid var(--ap-border);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+/* The last phrase — big, readable from a table. */
+.ap-turn-said {
+  min-height: 56px;
+  color: var(--ap-muted);
+  text-align: center;
+  font-size: 16px;
+}
+
+.ap-turn-heard {
+  min-height: 90px;
+  color: var(--ap-amber);
+  text-align: center;
+  font-size: 26px;
+  line-height: 1.3;
+}
+
+/* THE BUTTON in the middle — the whole interface. */
+.ap-turn-button {
+  align-self: center;
+  width: min(86vw, 420px);
+  padding: 26px 20px;
+  font: inherit;
+  font-size: 19px;
+  font-weight: 700;
+  border-radius: 18px;
+  cursor: pointer;
+  border: 1px solid var(--ap-green-strong);
+  background: rgba(0, 45, 64, 0.44);
+  color: var(--ap-green);
+  transition: background 140ms ease, color 140ms ease;
+}
+
+.ap-turn-button.ap-turn-live {
+  background: var(--ap-green);
+  color: #10251a;
+}
+
+.ap-turn-button.ap-turn-listening {
+  background: rgba(72, 52, 8, 0.5);
+  border-color: var(--ap-amber);
+  color: var(--ap-amber);
+}
+
+.ap-turn-small {
+  align-self: center;
+  background: none;
+  border: none;
+  color: var(--ap-orange);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.ap-turn-history {
+  color: var(--ap-muted);
+  font-size: 13px;
+  max-height: 30vh;
+  overflow-y: auto;
+}
+
+.ap-turn-history div {
+  padding: 3px 0;
+  border-bottom: 1px dashed rgba(132, 172, 255, 0.12);
+}
+
+/* ---- Ads ---- */
+
+.ap-ad-slot {
+  border: 1px dashed var(--ap-border);
+  border-radius: 10px;
+  min-height: 250px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ap-muted);
+  font-size: 12px;
+}
+
+/* ---- Footer ---- */
+
+.ap-footer {
+  color: var(--ap-muted);
+  font-size: 12px;
+  padding-top: 22px;
+  text-align: center;
+}
