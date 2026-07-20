@@ -3,10 +3,10 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Turn Translator — speak, tap, the other answers | AnotherPart</title>
+    <title>Turn Translator — two buttons, speak in turns | AnotherPart</title>
     <meta
       name="description"
-      content="Put the phone between you: speak, tap the button, the other person answers in their language. Free instant voice translator in your browser, no sign-in." />
+      content="Put the phone on the table between you. Each person has their own button: tap it, speak, it translates live. Free voice translator in your browser, no sign-in." />
     <link rel="stylesheet" href="/src/styles.css" />
   </head>
   <body>
@@ -14,34 +14,47 @@
       <nav class="ap-nav" data-active="translators"></nav>
 
       <main class="ap-main">
-        <div class="ap-stage">
-        <div class="ap-turn">
-          <div class="ap-turn-langs">
-            <select id="langA" class="ap-select"></select>
-            <span class="ap-status-muted">⇄</span>
-            <select id="langB" class="ap-select"></select>
+        <div class="ap-stage ap-stage-fill">
+          <div class="ap-turn">
+            <!-- ROW 1 (top, grows, scrolls): status + live zone. -->
+            <div class="ap-turn-top">
+              <div id="engineStatus" class="ap-status-muted"
+                style="text-align: center"></div>
+
+              <!-- The current turn, segment by segment (original /
+                   translation pairs). Tap a chunk to hear it. -->
+              <div id="live" class="ap-turn-live-zone"></div>
+            </div>
+
+            <!-- ROW 2 (dead-center, immovable): two buttons; the
+                 language lives IN the button (a ▾ in the corner),
+                 the body starts/stops. -->
+            <div class="ap-turn-mid">
+              <div class="ap-turn-buttons">
+                <div id="btnA" class="ap-turn-side" data-side="a">
+                  <select id="langA" class="ap-turn-lang"></select>
+                  <span class="ap-turn-side-label"></span>
+                </div>
+                <div id="btnB" class="ap-turn-side" data-side="b">
+                  <select id="langB" class="ap-turn-lang"></select>
+                  <span class="ap-turn-side-label"></span>
+                </div>
+              </div>
+
+              <label class="ap-turn-speak">
+                <input type="checkbox" id="autoSpeak" />
+                speak the translation aloud automatically
+              </label>
+            </div>
+
+            <!-- ROW 3 (bottom, grows, scrolls): the archive. -->
+            <div id="archive" class="ap-turn-archive"></div>
           </div>
-
-          <div id="engineStatus" class="ap-status-muted" style="text-align: center"></div>
-
-          <div id="said" class="ap-turn-said"></div>
-          <div id="heard" class="ap-turn-heard"></div>
-
-          <button id="turnButton" class="ap-turn-button ap-turn-live">
-            🎤 Tap and speak
-          </button>
-
-          <button id="stopButton" class="ap-turn-small" hidden>
-            stop the translator
-          </button>
-
-          <div id="history" class="ap-turn-history"></div>
-        </div>
         </div>
 
         <div class="ap-footer">
           instant online translator — audio goes to your browser vendor
-          while listening · free, no sign-in ·
+          while a button is lit · free, no sign-in ·
           <a href="/translate/">other translators</a>
         </div>
       </main>
