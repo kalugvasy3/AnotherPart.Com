@@ -149,6 +149,45 @@ a {
   flex-shrink: 0;
 }
 
+/* ---- THE GLOBE PAGE (Vasily, 2026-07-20): the center grid cell IS
+   the globe layer. NO intermediate panel, NO padding, NO width chain —
+   the canvas absolutely fills the cell; the caption is plain floating
+   text on top of it (no band, no highlight). */
+.ap-main-globe {
+  display: block;
+  position: relative;
+  padding: 0;
+}
+
+/* Doubled selector: the generic `.ap-main > * { max-width: 680px }`
+   sits LATER in the file with equal specificity and was clamping the
+   canvas to 680px — the black stripe. (0,2,0) wins regardless of order. */
+.ap-main.ap-main-globe > * {
+  width: 100%;
+  max-width: none;
+}
+
+.ap-main-globe .ap-globe-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.ap-main-globe .ap-footer {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 4px;
+  margin: 0;
+  padding: 0 12px;
+  background: none;
+  text-align: center;
+  pointer-events: none;
+  text-shadow: 0 0 6px rgba(0, 0, 0, 0.9);
+  z-index: 5;
+}
+
 .ap-nav,
 .ap-ads {
   padding: 10px;
@@ -234,6 +273,11 @@ a {
   display: inline-block;
   text-decoration: none;
   border: none;
+  /* No browser focus ring — the bright cyan box that appeared around
+     the brand after a click (Vasily, 2026-07-20: «окантовка из неона…
+     здесь не нужна»). */
+  outline: none;
+  -webkit-tap-highlight-color: transparent;
   background: linear-gradient(
     100deg,
     rgba(120, 215, 245, 0.55) 0%,
@@ -254,7 +298,11 @@ a {
   letter-spacing: 0.14em;
   padding: 2px 2px 6px;
   cursor: pointer;
-  white-space: nowrap;
+  /* Wrap long tool names (e.g. «Wiki on the Globus») to keep the brand
+     INSIDE the 160px nav column instead of spilling over the dock. */
+  white-space: normal;
+  max-width: 140px;
+  line-height: 1.25;
   filter: drop-shadow(0 0 8px rgba(80, 210, 255, 0.35));
   animation:
     ap-neon-sweep 6.5s linear infinite,
@@ -421,26 +469,38 @@ a {
 
 /* ---- Tool cards (category listings) ---- */
 
+/* Flat rows inside the ONE glowing stage panel — no card-in-panel
+   matryoshka (Vasily, 2026-07-20, variant B). A hairline separates rows;
+   a colour dot carries each engine's identity in place of a box border. */
 .ap-tool-card {
   display: block;
   text-decoration: none;
   color: inherit;
-  background: var(--ap-panel);
-  border: 1px solid var(--ap-border);
-  border-radius: 12px;
-  padding: 14px 16px;
-  margin-bottom: 12px;
-  transition: border-color 140ms ease;
+  background: transparent;
+  border: none;
+  border-top: 1px solid rgba(150, 170, 180, 0.14);
+  border-radius: 0;
+  padding: 12px 4px;
+  margin: 0;
+  transition: background 140ms ease;
 }
 
 .ap-tool-card:hover {
-  border-color: var(--ap-accent);
-  box-shadow: 0 0 12px rgba(114, 187, 255, 0.35);
+  background: rgba(120, 230, 255, 0.05);
 }
 
 .ap-tool-card.ap-soon {
   opacity: 0.45;
   pointer-events: none;
+}
+
+.ap-tool-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 8px;
+  vertical-align: 1px;
 }
 
 .ap-tool-name {
@@ -463,6 +523,406 @@ a {
 .ap-status-busy { color: var(--ap-amber); font-size: 13px; }
 .ap-status-bad { color: var(--ap-red); font-size: 13px; }
 .ap-status-muted { color: var(--ap-muted); font-size: 13px; }
+
+/* ---- One-time on-device model download (amber = process) ---- */
+
+/* Centered under the (centered) status sentence — keeps the harmony. */
+.ap-dl-box {
+  text-align: center;
+}
+
+.ap-dl-link {
+  display: inline-block;
+  margin-top: 8px;
+  padding: 5px 14px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--ap-amber);
+  background: rgba(255, 211, 107, 0.06);
+  border: 1px solid var(--ap-amber);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 140ms ease;
+}
+
+.ap-dl-link:hover {
+  background: rgba(255, 211, 107, 0.16);
+}
+
+.ap-progress {
+  width: 100%;
+  max-width: 320px;
+  height: 6px;
+  margin: 10px auto 0;
+  background: rgba(150, 170, 180, 0.18);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.ap-progress-bar {
+  width: 0;
+  height: 100%;
+  background: var(--ap-amber);
+  border-radius: 999px;
+  transition: width 220ms ease;
+}
+
+.ap-progress-bar.ap-progress-indeterminate {
+  width: 40%;
+  animation: ap-progress-slide 1.1s ease-in-out infinite;
+}
+
+@keyframes ap-progress-slide {
+  0% { margin-left: -40%; }
+  100% { margin-left: 100%; }
+}
+
+/* ---- The live «pending» row: the indicator, INSIDE the live zone,
+   that walks its phases and then becomes the finished segment ---- */
+
+.ap-seg-pending {
+  cursor: default;
+}
+
+.ap-seg-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-left-color: transparent;
+}
+
+.ap-activity-text {
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.ap-activity-listening .ap-activity-text {
+  color: var(--ap-green);
+}
+
+.ap-activity-hearing .ap-activity-text,
+.ap-activity-working .ap-activity-text {
+  color: var(--ap-amber);
+}
+
+.ap-activity-meter {
+  flex: 1;
+  max-width: 220px;
+  height: 6px;
+  background: rgba(150, 170, 180, 0.18);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.ap-activity-fill {
+  display: block;
+  width: 0;
+  height: 100%;
+  background: var(--ap-green);
+  border-radius: 999px;
+  transition: width 120ms linear;
+}
+
+.ap-activity-hearing .ap-activity-fill {
+  background: var(--ap-amber);
+}
+
+.ap-activity-meter.ap-activity-meter-indet .ap-activity-fill {
+  width: 40%;
+  background: var(--ap-amber);
+  animation: ap-progress-slide 1.1s ease-in-out infinite;
+}
+
+/* ---- Scroll zones: an ALWAYS-VISIBLE, on-brand scrollbar ----
+   macOS hides overlay scrollbars until you drag, so the scroll «panel»
+   kept vanishing. `scrollbar-gutter: stable` reserves the track always
+   (a visible strip even before overflow), and a lit track + thumb make it
+   unmistakable — identical on every Turn page. */
+.ap-stage,
+.ap-turn-live-zone,
+.ap-turn-archive,
+.ap-turn-history {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(175, 195, 205, 0.6) rgba(150, 170, 180, 0.12);
+  scrollbar-gutter: stable;
+}
+
+.ap-stage::-webkit-scrollbar,
+.ap-turn-live-zone::-webkit-scrollbar,
+.ap-turn-archive::-webkit-scrollbar,
+.ap-turn-history::-webkit-scrollbar {
+  width: 12px;
+}
+
+.ap-stage::-webkit-scrollbar-track,
+.ap-turn-live-zone::-webkit-scrollbar-track,
+.ap-turn-archive::-webkit-scrollbar-track,
+.ap-turn-history::-webkit-scrollbar-track {
+  background: rgba(150, 170, 180, 0.12);
+  border-radius: 999px;
+  margin: 2px 0;
+}
+
+.ap-stage::-webkit-scrollbar-thumb,
+.ap-turn-live-zone::-webkit-scrollbar-thumb,
+.ap-turn-archive::-webkit-scrollbar-thumb,
+.ap-turn-history::-webkit-scrollbar-thumb {
+  background: rgba(175, 195, 205, 0.6);
+  border-radius: 999px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+
+.ap-stage::-webkit-scrollbar-thumb:hover,
+.ap-turn-live-zone::-webkit-scrollbar-thumb:hover,
+.ap-turn-archive::-webkit-scrollbar-thumb:hover,
+.ap-turn-history::-webkit-scrollbar-thumb:hover {
+  background: rgba(200, 220, 230, 0.85);
+  background-clip: content-box;
+}
+
+/* ---- Duplex: a voice «messenger» — stream + bottom control bar ---- */
+
+.ap-duplex {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ap-duplex-status {
+  flex-shrink: 0;
+  text-align: center;
+}
+
+/* The conversation, newest at the bottom (near the bar). `margin-top:auto`
+   on the first child pins it down without the flex-end scroll bug. */
+.ap-duplex-stream {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ap-duplex-stream > :first-child {
+  margin-top: auto;
+}
+
+.ap-duplex-empty {
+  margin: auto;
+  max-width: 320px;
+  text-align: center;
+  color: var(--ap-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* Controls pinned below the stream, like a chat input row. */
+.ap-duplex-bar {
+  flex-shrink: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 10px 14px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(150, 170, 180, 0.14);
+}
+
+.ap-duplex-langs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ap-duplex-swap {
+  color: var(--ap-muted);
+  font-size: 18px;
+}
+
+.ap-duplex-start {
+  padding: 12px 22px;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 700;
+  border-radius: 14px;
+  cursor: pointer;
+  border: 1px solid var(--ap-green-strong);
+  background: rgba(0, 45, 64, 0.44);
+  color: var(--ap-green);
+  transition: background 140ms ease, color 140ms ease, border-color 140ms ease;
+}
+
+.ap-duplex-start:hover {
+  background: rgba(0, 60, 84, 0.6);
+}
+
+.ap-duplex-start.ap-duplex-live {
+  background: rgba(72, 52, 8, 0.55);
+  border-color: var(--ap-amber);
+  color: var(--ap-amber);
+  animation: ap-turn-pulse 1.6s ease-in-out infinite;
+}
+
+.ap-duplex-start:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.ap-duplex-clear {
+  padding: 10px 12px;
+  font: inherit;
+  font-size: 16px;
+  line-height: 1;
+  border-radius: 12px;
+  cursor: pointer;
+  border: 1px solid var(--ap-border);
+  background: transparent;
+  color: var(--ap-muted);
+  transition: color 140ms ease, border-color 140ms ease;
+}
+
+.ap-duplex-clear:hover {
+  color: var(--ap-orange);
+  border-color: var(--ap-orange);
+}
+
+.ap-duplex-speak {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--ap-muted);
+  cursor: pointer;
+  transition: color 140ms ease;
+}
+
+/* Bigger, on-brand checkbox; the label lights up when it's on. */
+.ap-duplex-speak input[type='checkbox'] {
+  width: 17px;
+  height: 17px;
+  accent-color: var(--ap-green-strong);
+  cursor: pointer;
+}
+
+.ap-duplex-speak:has(input:checked) {
+  color: var(--ap-green);
+}
+
+.ap-duplex-speak input:disabled {
+  cursor: default;
+}
+
+.ap-duplex-speak:has(input:disabled) {
+  opacity: 0.45;
+}
+
+/* ---- Listening notes (transcript + tap-a-word dictionary) ---- */
+
+.ap-field-label {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 10px;
+  color: var(--ap-muted);
+}
+
+/* Finger-friendly swap between the two languages. */
+.ap-swap-btn {
+  align-self: flex-end;
+  min-width: 40px;
+  min-height: 40px;
+  font: inherit;
+  font-size: 18px;
+  color: var(--ap-green);
+  background: rgba(0, 45, 64, 0.44);
+  border: 1px solid var(--ap-green-strong);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background 140ms ease;
+}
+
+.ap-swap-btn:hover {
+  background: rgba(0, 60, 84, 0.6);
+}
+
+.ap-note-text {
+  line-height: 1.55;
+}
+
+/* «recognizing…» placeholder — shows the queue while Whisper works. */
+.ap-note-recognizing {
+  cursor: default;
+}
+
+.ap-note-wait {
+  color: var(--ap-amber);
+  font-style: italic;
+  font-size: 13px;
+}
+
+.ap-word {
+  cursor: pointer;
+  border-radius: 3px;
+  padding: 0 1px;
+  transition: background 100ms ease;
+}
+
+.ap-word:hover {
+  background: rgba(255, 211, 107, 0.18);
+}
+
+.ap-note-orig {
+  border: 1px solid var(--ap-green-strong);
+  color: var(--ap-green);
+  background: rgba(0, 45, 64, 0.44);
+  border-radius: 6px;
+  padding: 0 7px;
+  cursor: pointer;
+  font-size: 12px;
+  vertical-align: 1px;
+}
+
+.ap-word-pop {
+  position: fixed;
+  z-index: 50;
+  max-width: 260px;
+  background: #0c1626;
+  border: 1px solid rgba(120, 230, 255, 0.4);
+  border-radius: 10px;
+  padding: 9px 11px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+}
+
+.ap-word-pop-src {
+  color: var(--ap-accent);
+  font-size: 12px;
+  margin-bottom: 3px;
+}
+
+.ap-word-pop-ipa {
+  color: var(--ap-amber);
+  font-size: 13px;
+  margin-bottom: 3px;
+}
+
+.ap-word-pop-tr {
+  color: var(--ap-text);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+/* ---- Wiki on the Globus (Babylon canvas fills the centre zone) ---- */
+
+.ap-globe-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+  outline: none;
+  touch-action: none;
+}
 
 /* ---- The TURN tool (phone lies between two people) ---- */
 
@@ -591,8 +1051,17 @@ a {
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  justify-content: flex-end;
   gap: 8px;
+}
+
+/* Anchor content to the BOTTOM (nearest the buttons) WITHOUT
+   `justify-content: flex-end` — that flexbox setting overflows upward into
+   an unreachable, scrollbar-less dead zone (Chrome). `margin-top: auto` on
+   the first child does the same pinning but collapses to 0 on overflow, so
+   the zone scrolls normally and the scrollbar shows — exactly like the
+   archive (Vasily, 2026-07-20: «наверху скролла нет, а в архиве есть»). */
+.ap-turn-live-zone > :first-child {
+  margin-top: auto;
 }
 
 .ap-seg {
@@ -686,10 +1155,19 @@ select {
 
 .ap-select {
   background: rgba(0, 34, 48, 0.58);
-  color: var(--ap-text);
-  border: 1px solid var(--ap-border);
+  color: var(--ap-amber);
+  border: 1px solid var(--ap-amber);
   border-radius: 8px;
   padding: 8px 10px;
+  accent-color: var(--ap-amber);
+}
+
+/* Amber selection, no stray blue focus ring (browser default). */
+.ap-select:focus,
+.ap-select:focus-visible {
+  outline: none;
+  border-color: var(--ap-amber);
+  box-shadow: 0 0 0 2px rgba(255, 211, 107, 0.35);
 }
 
 /* The last phrase — big, readable from a table. */
@@ -778,4 +1256,352 @@ select {
   font-size: 12px;
   padding-top: 22px;
   text-align: center;
+}
+
+/* ---- THE KNOCK panel (verbatim from .Me app.component.css) --------
+   dblclick a place → the degree cell answers. Reuses the finder family
+   for rows/notes. */
+.ap-sky-finder-clear {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(80, 210, 255, 0.14);
+  color: rgba(200, 240, 255, 0.9);
+  font: 700 14px Consolas, monospace;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.ap-sky-finder-clear:hover {
+  background: rgba(80, 210, 255, 0.3);
+}
+
+.ap-sky-finder-note {
+  padding: 6px;
+  font: italic 500 11px Consolas, monospace;
+  color: rgba(160, 215, 235, 0.6);
+}
+
+.ap-knock-panel {
+  position: fixed;
+  width: 288px;
+  max-height: 480px;
+  user-select: none;
+  overflow-y: auto;
+  padding: 10px;
+  border: 1px solid rgba(120, 230, 255, 0.42);
+  background: rgba(3, 12, 24, 0.96);
+  box-shadow: 0 0 24px rgba(80, 210, 255, 0.22);
+  z-index: 230000;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(120, 230, 255, 0.35) rgba(10, 24, 38, 0.5);
+}
+
+.ap-knock-panel::-webkit-scrollbar {
+  width: 8px;
+}
+
+.ap-knock-panel::-webkit-scrollbar-thumb {
+  background: rgba(120, 230, 255, 0.35);
+  border-radius: 4px;
+}
+
+.ap-knock-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+  cursor: move;
+  user-select: none;
+  touch-action: none;
+}
+
+.ap-knock-head .ap-sky-finder-clear {
+  position: static;
+  transform: none;
+  flex: 0 0 auto;
+}
+
+/* ORANGE = be careful (traffic-light law): forgetting discoveries. */
+.ap-knock-actions {
+  display: flex;
+  gap: 8px;
+  padding: 2px 0 8px;
+}
+
+.ap-knock-action {
+  flex: 1;
+  padding: 5px 8px;
+  border: 1px solid rgba(255, 150, 60, 0.5);
+  border-radius: 8px;
+  background: rgba(60, 30, 8, 0.5);
+  color: rgba(255, 180, 110, 0.92);
+  font: 600 11px Consolas, monospace;
+  cursor: pointer;
+}
+
+.ap-knock-action:hover {
+  background: rgba(255, 150, 60, 0.2);
+}
+
+.ap-knock-travel .ap-sky-finder-name {
+  color: rgba(140, 240, 175, 0.95);
+}
+
+.ap-knock-retry-note {
+  color: rgba(255, 200, 100, 0.85);
+}
+
+.ap-knock-detail {
+  padding: 4px 8px 8px;
+  font: 500 11px Consolas, monospace;
+  color: rgba(180, 225, 245, 0.8);
+  user-select: text;
+}
+
+.ap-knock-detail a {
+  color: rgba(120, 230, 255, 0.9);
+}
+
+.ap-sky-finder-title {
+  font: 700 10px Consolas, monospace;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(150, 220, 245, 0.7);
+  padding: 2px 6px 6px;
+}
+
+.ap-sky-finder-title-gap {
+  margin-top: 18px;
+  border-top: 1px solid rgba(120, 230, 255, 0.18);
+  padding-top: 12px;
+}
+
+.ap-sky-finder-item {
+  display: flex;
+  width: 100%;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 6px;
+  border: none;
+  background: transparent;
+  color: rgba(228, 246, 255, 0.94);
+  font: 600 12px Consolas, monospace;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 6px;
+}
+
+.ap-sky-finder-item:hover {
+  background: rgba(80, 210, 255, 0.14);
+}
+
+.ap-sky-finder-item-active {
+  background: rgba(80, 210, 255, 0.2);
+  box-shadow: inset 0 0 0 1px rgba(140, 235, 255, 0.55);
+}
+
+.ap-sky-finder-name {
+  white-space: nowrap;
+  flex: 1;
+}
+
+.ap-sky-finder-hint {
+  font-size: 10px;
+  color: rgba(160, 215, 235, 0.55);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---- THE SKY DOCK (verbatim from .Me app.component.css) -----------
+   mode · sky content · position. Lives over the star area. */
+.ap-sky-dock {
+  position: fixed;
+  top: 16px;
+  /* Shifted into the CENTER column (nav is 160px) so the buttons never
+     overlap the brand/title on the left. */
+  left: 184px;
+  z-index: 9000;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+.ap-sky-dock .ap-sky-main-button {
+  width: 60px;
+  height: 60px;
+  padding: 9px;
+}
+
+.ap-sky-dock .ap-sky-group-gap {
+  margin-left: 10px;
+}
+
+.ap-sky-dock > button {
+  transition: opacity 0.35s ease, box-shadow 0.35s ease,
+    border-color 0.2s ease;
+}
+
+.ap-sky-dock [data-tip] {
+  position: relative;
+}
+
+.ap-sky-dock [data-tip]::after {
+  content: attr(data-tip);
+  position: absolute;
+  top: calc(100% + 10px);
+  left: 0;
+  z-index: 9600;
+  width: max-content;
+  max-width: 440px;
+  padding: 8px 14px;
+  border-radius: 6px;
+  border: 1px solid rgba(160, 190, 225, 0.5);
+  background: rgba(8, 14, 24, 0.92);
+  color: rgba(215, 228, 245, 0.95);
+  font: 20px/1.35 Consolas, monospace;
+  white-space: normal;
+  text-align: left;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.15s ease 0s, visibility 0s linear 0.15s;
+}
+
+.ap-sky-dock [data-tip]:hover::after {
+  opacity: 1;
+  visibility: visible;
+  transition: opacity 0.15s ease 0.45s, visibility 0s linear 0.45s;
+}
+
+.ap-sky-dock-ghost > button {
+  opacity: 0.1 !important;
+  box-shadow: none !important;
+}
+
+.ap-sky-dock-ghost > button:hover {
+  opacity: 0.22 !important;
+}
+
+.ap-sky-dock-ghost .ap-sky-coord {
+  opacity: 0.1 !important;
+  box-shadow: none !important;
+  transition: opacity 0.35s ease;
+}
+
+.ap-sky-dock-ghost .ap-sky-coord:hover {
+  opacity: 0.22 !important;
+}
+
+.ap-constellation-button {
+  width: 46px;
+  height: 46px;
+  padding: 7px;
+  border: 1px solid rgba(120, 230, 255, 0.6);
+  border-radius: 10px;
+  background: rgba(3, 8, 16, 0.7);
+  color: rgba(180, 235, 255, 0.95);
+  opacity: 0.92;
+  cursor: pointer;
+  box-shadow: 0 0 14px rgba(80, 210, 255, 0.2);
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: manipulation;
+}
+
+.ap-constellation-button:hover {
+  opacity: 1;
+  border-color: rgba(170, 245, 255, 0.9);
+  box-shadow: 0 0 20px rgba(80, 210, 255, 0.35);
+}
+
+.ap-sky-dock-position {
+  align-self: center;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  user-select: none;
+  -webkit-user-select: none;
+  margin-left: 54px;
+}
+
+.ap-sky-coord {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 56px;
+  height: 46px;
+  padding: 0 6px;
+  border: 1px solid rgba(255, 214, 130, 0.45);
+  border-radius: 10px;
+  background: rgba(3, 8, 16, 0.7);
+  color: rgba(255, 224, 150, 0.9);
+  font: 600 13px Consolas, Monaco, monospace;
+  cursor: ns-resize;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease,
+    transform 0.3s ease;
+}
+
+.ap-sky-coord:hover {
+  border-color: rgba(255, 235, 180, 0.95);
+  box-shadow: 0 0 10px rgba(255, 200, 90, 0.3);
+}
+
+.ap-sky-coord-traveling {
+  transform: scale(1.3);
+  border-color: rgba(255, 235, 180, 1);
+  color: rgba(255, 238, 180, 1);
+  animation: ap-sky-coord-pulse 0.7s ease-in-out infinite;
+  z-index: 2;
+}
+
+@keyframes ap-sky-coord-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 10px rgba(255, 200, 90, 0.35);
+  }
+  50% {
+    box-shadow: 0 0 22px rgba(255, 210, 110, 0.85);
+  }
+}
+
+.ap-sky-view-on {
+  border-color: rgba(255, 214, 130, 0.85) !important;
+  color: rgba(255, 224, 150, 0.95) !important;
+  box-shadow: 0 0 18px rgba(255, 200, 90, 0.35) !important;
+}
+
+.ap-constellation-button svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.ap-constellation-icon-lines {
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.ap-constellation-mode-1 .ap-constellation-icon-lines {
+  opacity: 0.8;
+  stroke-dasharray: 3 3;
+}
+
+.ap-constellation-mode-2 .ap-constellation-icon-lines {
+  opacity: 1;
+}
+
+.ap-constellation-mode-1,
+.ap-constellation-mode-2 {
+  opacity: 0.7;
 }

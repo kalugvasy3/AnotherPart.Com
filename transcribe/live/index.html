@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Live Captions — text as you speak (Chrome / Vosk) | AnotherPart</title>
+    <meta
+      name="description"
+      content="Live captions: speech turns into text the moment you talk — Chrome's Web Speech when available, otherwise offline Vosk. Pick the spoken language, tap a word for a dictionary hint. No sign-in." />
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body data-mode="streaming">
+    <div class="ap-shell">
+      <nav class="ap-nav" data-active="transcriber"></nav>
+
+      <main class="ap-main">
+        <div class="ap-stage ap-stage-fill">
+          <div class="ap-duplex">
+            <div id="engineStatus" class="ap-status-muted ap-duplex-status"></div>
+
+            <div id="stream" class="ap-duplex-stream"></div>
+
+            <div class="ap-duplex-bar">
+              <div class="ap-duplex-langs">
+                <label class="ap-field-label">Listening
+                  <select id="listening" class="ap-select"></select>
+                </label>
+                <button type="button" id="swap" class="ap-swap-btn"
+                  title="Swap languages" aria-label="Swap languages">⇄</button>
+                <label class="ap-field-label">Dictionary
+                  <select id="dictionary" class="ap-select"></select>
+                </label>
+              </div>
+
+              <button id="startPause" class="ap-duplex-start" type="button">
+                Start
+              </button>
+
+              <button id="clearBtn" class="ap-duplex-clear" type="button"
+                title="Clear" hidden>🗑</button>
+
+              <button id="saveBtn" class="ap-duplex-clear" type="button"
+                title="Save the transcript (text)" hidden>Save</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="ap-footer">
+          live captions — text appears as you speak · fixed to the Listening
+          language · Chrome's Web Speech (online) if available, otherwise
+          offline Vosk · tap a word for a dictionary hint ·
+          <a href="/transcribe/">back</a>
+        </div>
+      </main>
+
+      <aside class="ap-ads">
+        <div class="ap-ad-slot">ad</div>
+      </aside>
+    </div>
+
+    <script type="module" src="/src/nav.ts"></script>
+    <script type="module" src="/src/notes.ts"></script>
+  </body>
+</html>

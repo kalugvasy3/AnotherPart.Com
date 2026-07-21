@@ -1,12 +1,11 @@
 /**
- * TURN TRANSLATOR — two buttons, streaming, one-way at a time
- * (Vasily, 2026-07-18). The phone lies on the table between two
- * people; EACH side owns a button:
+ * TURN TRANSLATOR — two buttons, one-way at a time (Vasily, 2026-07-18).
+ * The phone lies on the table between two people; EACH side owns a button:
  *
  *  - tap YOUR button → it lights amber, your side is being heard;
  *  - tap it again → stop; or the OTHER taps theirs → your button
  *    goes idle where it was, theirs lights up (the turn is taken);
- *  - always streaming, always one-way in the moment.
+ *  - always one-way in the moment.
  *
  * LIVE zone (above the buttons): the current turn, segment by
  * segment — original / translation pairs. Pauses split segments;
@@ -18,19 +17,20 @@
  * enough); a checkbox turns on auto-speak, otherwise ▶ on demand.
  * The mic is only blocked during a ▶ playback.
  *
- * Predefined pair: Chrome online recognition × Chrome built-in
- * translation. Later the SAME layout wraps other one-way pairs.
+ * This is a TEMPLATE: the engine pair is chosen by `data-pair` on the
+ * page <body> and resolved through engines.ts (getTurnPair). The online
+ * page (Web Speech × Chrome) and the offline page (Whisper × Marian)
+ * are the SAME code, different pair.
  */
 
 import {
   SPEECH_LOCALES,
-  buildRecognition,
-  chromeTranslatorSupported,
   countToolUse,
   fillLanguageSelect,
-  getChromeTranslator,
-  speechRecognitionSupported,
-  type SpeechRecognitionLike
+  getTurnPair,
+  type PrepareProgress,
+  type RecognizerActivity,
+  type RecognizerHandlers
 } from './engines';
 
 // A colour per language for the badges (extend freely).
@@ -66,32 +66,246 @@ const archive = $<HTMLDivElement>('archive');
 const labelA = btnA.querySelector<HTMLSpanElement>('.ap-turn-side-label')!;
 const labelB = btnB.querySelector<HTMLSpanElement>('.ap-turn-side-label')!;
 
-fillLanguageSelect(langA, 'en');
-fillLanguageSelect(langB, 'ru');
+// The predefined pair for THIS page (online is the default template).
+const pair = getTurnPair(document.body.dataset.pair);
+
+fillLanguageSelect(langA, pair.defaults.a, pair.langs);
+fillLanguageSelect(langB, pair.defaults.b, pair.langs);
 
 function langColor(code: string): string {
   return LANG_COLORS[code] ?? '#94a7cc';
 }
 
-// ---- Honest gate --------------------------------------------------
+// ---- Honest gate + one-time model download ------------------------
 
-function refreshGate(): boolean {
-  const ok = speechRecognitionSupported() && chromeTranslatorSupported();
+let ready = false;
+let prepared = false;
+let preparing: Promise<void> | null = null;
 
-  if (ok) {
-    engineStatus.className = 'ap-status-ready';
-    engineStatus.textContent =
-      '✓ ready — tap your button and speak';
-  } else {
-    engineStatus.className = 'ap-status-bad';
-    engineStatus.textContent = !speechRecognitionSupported()
-      ? 'this translator needs Chrome or Edge (speech recognition)'
-      : 'this translator needs Chrome 138+ (built-in translation)';
-    btnA.classList.add('ap-turn-side-off');
-    btnB.classList.add('ap-turn-side-off');
+// A pair that must fetch models (offline) gets an explicit download control
+// and a progress bar — built ONLY for such a pair. The online pair never
+// shows any of this.
+let dlBox: HTMLDivElement | null = null;
+let dlLink: HTMLButtonElement | null = null;
+let progressWrap: HTMLDivElement | null = null;
+let progressBar: HTMLDivElement | null = null;
+
+if (pair.prepare) {
+  dlBox = document.createElement('div');
+  dlBox.className = 'ap-dl-box';
+
+  dlLink = document.createElement('button');
+  dlLink.type = 'button';
+  dlLink.className = 'ap-dl-link';
+  dlLink.textContent = `⬇ download on-device models (${
+    pair.downloadHint ?? 'one time'
+  }, one time)`;
+  dlLink.addEventListener('click', () => void ensurePrepared());
+
+  progressWrap = document.createElement('div');
+  progressWrap.className = 'ap-progress';
+  progressWrap.hidden = true;
+
+  progressBar = document.createElement('div');
+  progressBar.className = 'ap-progress-bar';
+  progressWrap.appendChild(progressBar);
+
+  dlBox.appendChild(dlLink);
+  dlBox.appendChild(progressWrap);
+  dlBox.hidden = true;
+  engineStatus.insertAdjacentElement('afterend', dlBox);
+}
+
+// ---- The live «pending» row (indicator INSIDE the live zone) ------
+// The status lives in the live zone, pinned to the bottom (nearest the
+// buttons), NOT as a separate bar (Vasily, 2026-07-20). One pending row
+// walks the phases IN PLACE — listening (+mic level) → recording / streaming
+// interim → transcribing — then it BECOMES the finished segment, and a fresh
+// pending row opens below it for the next utterance.
+
+let pendingRow: HTMLDivElement | null = null;
+let pendingText = ''; // streaming interim text (online engines)
+let pendingActivity: RecognizerActivity | null = null;
+
+function removePending(): void {
+  pendingRow?.remove();
+  pendingRow = null;
+  pendingText = '';
+  pendingActivity = null;
+}
+
+function renderPending(): void {
+  if (!active) {
+    return;
   }
 
-  return ok;
+  if (!pendingRow) {
+    pendingRow = document.createElement('div');
+    live.appendChild(pendingRow);
+  }
+
+  // Online recognition streams text as you speak — show it growing.
+  if (pendingText) {
+    pendingRow.className = 'ap-seg ap-seg-pending ap-seg-interim';
+    pendingRow.textContent = pendingText;
+    pendingRow.scrollIntoView({ block: 'nearest' });
+    return;
+  }
+
+  const state = pendingActivity?.state ?? 'listening';
+  const level =
+    pendingActivity && 'level' in pendingActivity
+      ? pendingActivity.level
+      : undefined;
+
+  let label = 'listening…';
+  let stateClass = 'ap-activity-listening';
+
+  if (state === 'hearing') {
+    label = 'recording…';
+    stateClass = 'ap-activity-hearing';
+  } else if (state === 'transcribing') {
+    label = 'transcribing…';
+    stateClass = 'ap-activity-working';
+  }
+
+  const hasLevel = typeof level === 'number';
+  const meterClass = hasLevel
+    ? 'ap-activity-meter'
+    : 'ap-activity-meter ap-activity-meter-indet';
+  const fillStyle = hasLevel
+    ? `width:${Math.round(Math.min(1, level ?? 0) * 100)}%`
+    : '';
+
+  pendingRow.className = `ap-seg ap-seg-pending ap-seg-status ${stateClass}`;
+  pendingRow.innerHTML =
+    `<span class="ap-activity-text">${label}</span>` +
+    `<span class="${meterClass}"><span class="ap-activity-fill" style="${fillStyle}"></span></span>`;
+  pendingRow.scrollIntoView({ block: 'nearest' });
+}
+
+function setActivity(a: RecognizerActivity): void {
+  if (a.state === 'idle') {
+    removePending();
+    return;
+  }
+
+  pendingActivity = a;
+  renderPending();
+}
+
+function setReady(): void {
+  ready = true;
+  engineStatus.className = 'ap-status-ready';
+  engineStatus.textContent = `✓ ${pair.name} — tap your button and speak`;
+
+  if (dlBox) {
+    dlBox.hidden = true;
+  }
+}
+
+function showProgress(progress: PrepareProgress): void {
+  if (dlLink) {
+    dlLink.hidden = true;
+  }
+
+  if (progressWrap) {
+    progressWrap.hidden = false;
+  }
+
+  engineStatus.className = 'ap-status-busy';
+  engineStatus.textContent = progress.message;
+
+  if (progressBar) {
+    if (progress.fraction == null) {
+      progressBar.classList.add('ap-progress-indeterminate');
+      progressBar.style.width = '';
+    } else {
+      progressBar.classList.remove('ap-progress-indeterminate');
+      progressBar.style.width = `${Math.round(progress.fraction * 100)}%`;
+    }
+  }
+}
+
+// The gate checks support and, for an offline pair, whether the models are
+// ALREADY on the device. Heavy work (downloading + compiling ~120 MB of
+// Whisper/Marian WASM) is never done on page-open — it froze a Mac once
+// (2026-07-20). If the models are missing, we offer an explicit download; if
+// they are present, the download sentence never appears at all.
+async function initPair(): Promise<void> {
+  const support = pair.check();
+
+  if (!support.ok) {
+    engineStatus.className = 'ap-status-bad';
+    engineStatus.textContent =
+      support.reason ?? 'this translator is unavailable here';
+    btnA.classList.add('ap-turn-side-off');
+    btnB.classList.add('ap-turn-side-off');
+    return;
+  }
+
+  if (pair.prepare) {
+    const cached = pair.isReady ? await pair.isReady() : false;
+
+    if (cached) {
+      prepared = true;
+      setReady(); // everything's here — say nothing about downloads
+      return;
+    }
+
+    // Missing: buttons still work (a tap also downloads), but offer the
+    // explicit control up front.
+    ready = true;
+    engineStatus.className = 'ap-status-muted';
+    engineStatus.textContent = `${pair.name} — one-time setup:`;
+
+    if (dlBox) {
+      dlBox.hidden = false;
+    }
+
+    return;
+  }
+
+  setReady();
+}
+
+/** Lazy, once. Downloads/compiles the offline models. Drives the progress
+ *  bar; returns false if it failed (status/retry already shown). */
+async function ensurePrepared(): Promise<boolean> {
+  if (!pair.prepare || prepared) {
+    return true;
+  }
+
+  preparing ??= pair
+    .prepare(showProgress, langA.value, langB.value)
+    .then(() => {
+      prepared = true;
+    })
+    .finally(() => {
+      preparing = null;
+    });
+
+  try {
+    await preparing;
+    setReady();
+    return true;
+  } catch (error) {
+    if (progressWrap) {
+      progressWrap.hidden = true;
+    }
+
+    if (dlLink) {
+      dlLink.hidden = false;
+      dlLink.textContent = '↻ retry download';
+    }
+
+    engineStatus.className = 'ap-status-bad';
+    engineStatus.textContent = `couldn't load ${pair.name}: ${
+      error instanceof Error ? error.message : String(error)
+    }`;
+
+    return false;
+  }
 }
 
 // ---- The turn machine ---------------------------------------------
@@ -99,8 +313,6 @@ function refreshGate(): boolean {
 type Side = 'a' | 'b' | null;
 
 let active: Side = null;
-let recognition: SpeechRecognitionLike | null = null;
-let speaking = false; // a ▶ playback is holding the mic
 
 function sourceLang(side: 'a' | 'b'): string {
   return side === 'a' ? langA.value : langB.value;
@@ -125,6 +337,23 @@ function refreshButtons(): void {
   }
 }
 
+function handlersFor(side: 'a' | 'b'): RecognizerHandlers {
+  return {
+    onInterim: (text) => showInterim(text),
+    onFinal: (text) => {
+      if (text) {
+        void addSegment(text, side);
+      }
+    },
+    onError: (message) => {
+      engineStatus.className = 'ap-status-bad';
+      engineStatus.textContent = message;
+      stopTurn();
+    },
+    onActivity: (a) => setActivity(a)
+  };
+}
+
 // A live segment on screen: { original, translation } pair.
 interface Segment {
   original: string;
@@ -135,132 +364,90 @@ interface Segment {
 }
 
 let liveSegments: Segment[] = [];
-let interimRow: HTMLDivElement | null = null;
 
-function startTurn(side: 'a' | 'b'): void {
+async function startTurn(side: 'a' | 'b'): Promise<void> {
+  if (!ready) {
+    return;
+  }
+
+  // Cleanly end any previous listening (e.g. the OTHER side taking the turn)
+  // so a late result from it can't leak into this turn.
+  pair.recognizer.stop();
+
   active = side;
-  flushLiveToArchive(); // any leftover from a previous turn
-  liveSegments = [];
+  // BUGFIX (2026-07-20): seal the previous turn into the archive FIRST,
+  // then clear the live zone — never the reverse. Clearing before sealing
+  // would drop the tail into the wrong place.
+  flushLiveToArchive();
   clearLive();
-  startRecognition(side);
-  refreshButtons();
+  refreshButtons(); // amber immediately, even while models load
+
+  // First tap on an offline page may download/compile models here.
+  const ok = await ensurePrepared();
+
+  // The user may have tapped stop (or the other side) while we loaded.
+  if (!ok || active !== side) {
+    if (!ok && active === side) {
+      active = null;
+      refreshButtons();
+    }
+    return;
+  }
+
+  pair.recognizer.start(sourceLang(side), handlersFor(side));
 }
 
 function stopTurn(): void {
   active = null;
-  stopRecognition();
+  pair.recognizer.stop();
   flushLiveToArchive();
   refreshButtons();
-}
-
-function startRecognition(side: 'a' | 'b'): void {
-  recognition = buildRecognition();
-  recognition.lang = SPEECH_LOCALES[sourceLang(side)] ?? sourceLang(side);
-  recognition.continuous = true;
-  recognition.interimResults = true;
-
-  recognition.onresult = (event) => {
-    let interim = '';
-
-    for (let i = event.resultIndex; i < event.results.length; i++) {
-      const result = event.results[i];
-      const text = result[0].transcript.trim();
-
-      if (result.isFinal) {
-        if (text) {
-          void addSegment(text, side);
-        }
-      } else {
-        interim += result[0].transcript;
-      }
-    }
-
-    showInterim(interim.trim());
-  };
-
-  recognition.onend = () => {
-    // The engine drops on silence; while the button stays lit AND we
-    // are not mid-playback, revive it. No double tapping.
-    if (active === side && !speaking) {
-      try {
-        recognition?.start();
-      } catch {
-        // Restart storm guard.
-      }
-    }
-  };
-
-  recognition.onerror = (event) => {
-    if (event.error === 'not-allowed') {
-      engineStatus.className = 'ap-status-bad';
-      engineStatus.textContent =
-        'microphone blocked — allow it in the address bar';
-      stopTurn();
-    }
-  };
-
-  recognition.start();
-}
-
-function stopRecognition(): void {
-  try {
-    recognition?.stop();
-  } catch {
-    // Already stopped.
-  }
-
-  recognition = null;
-  showInterim('');
 }
 
 // ---- Live zone (pairs, tappable chunks) ---------------------------
 
 function clearLive(): void {
   live.innerHTML = '';
-  interimRow = null;
+  pendingRow = null;
+  pendingText = '';
+  pendingActivity = null;
 }
 
 function showInterim(text: string): void {
-  if (!text) {
-    interimRow?.remove();
-    interimRow = null;
-    return;
-  }
-
-  if (!interimRow) {
-    interimRow = document.createElement('div');
-    interimRow.className = 'ap-seg ap-seg-interim';
-    live.appendChild(interimRow);
-  }
-
-  interimRow.textContent = text;
-  interimRow.scrollIntoView({ block: 'nearest' });
+  pendingText = text;
+  renderPending();
 }
 
 async function addSegment(text: string, side: 'a' | 'b'): Promise<void> {
-  showInterim('');
-
   const from = sourceLang(side);
   const to = targetLang(side);
 
-  const row = document.createElement('div');
+  // The pending row (the live indicator) BECOMES this finished segment, in
+  // place; then a fresh pending row opens below for the next utterance.
+  const row = pendingRow ?? document.createElement('div');
+
+  if (!row.parentElement) {
+    live.appendChild(row);
+  }
+
+  pendingRow = null;
+  pendingText = '';
+  pendingActivity = null;
 
   row.className = 'ap-seg';
   row.style.borderLeftColor = langColor(from);
   row.innerHTML = `<div class="ap-seg-orig">${escapeHtml(text)}</div>
-    <div class="ap-seg-trans">…</div>`;
-  live.appendChild(row);
+    <div class="ap-seg-trans">translating…</div>`;
   row.scrollIntoView({ block: 'nearest' });
 
-  countToolUse('turn-two-button-chrome');
+  countToolUse(pair.id);
 
   const segment: Segment = { original: text, translation: '', from, to, row };
 
   liveSegments.push(segment);
 
   try {
-    const translator = await getChromeTranslator(from, to);
-    const translated = await translator.translate(text);
+    const translated = await pair.translator.translate(text, from, to);
 
     segment.translation = translated;
 
@@ -336,18 +523,15 @@ function playText(text: string, to: string): void {
     return;
   }
 
-  speaking = true;
-  stopRecognition(); // free the mic from itself
+  pair.recognizer.setPaused(true); // half-duplex: don't hear our own TTS
 
   const utterance = new SpeechSynthesisUtterance(text);
 
   utterance.lang = SPEECH_LOCALES[to] ?? to;
   utterance.onend = () => {
-    speaking = false;
-
     // If a button is still lit, resume listening for that side.
     if (active) {
-      startRecognition(active);
+      pair.recognizer.setPaused(false);
     }
   };
 
@@ -369,7 +553,7 @@ btnA.addEventListener('click', () => {
   if (active === 'a') {
     stopTurn();
   } else {
-    startTurn('a');
+    void startTurn('a');
   }
 });
 
@@ -377,7 +561,7 @@ btnB.addEventListener('click', () => {
   if (active === 'b') {
     stopTurn();
   } else {
-    startTurn('b');
+    void startTurn('b');
   }
 });
 
@@ -388,13 +572,13 @@ for (const select of [langA, langB]) {
 
   select.addEventListener('change', () => {
     if (active) {
-      stopRecognition();
-      startRecognition(active);
+      pair.recognizer.stop();
+      pair.recognizer.start(sourceLang(active), handlersFor(active));
     }
 
     refreshButtons();
   });
 }
 
-refreshGate();
 refreshButtons();
+void initPair();

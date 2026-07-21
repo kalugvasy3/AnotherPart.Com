@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Wiki on the Globus — Earth, sky and Wikipedia | AnotherPart</title>
+    <meta
+      name="description"
+      content="Spin the Earth from space, drop to the surface, look up at the real sky from your location — every star, planet and place opens its Wikipedia article. Fully in your browser, no sign-in." />
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <div class="ap-shell">
+      <nav class="ap-nav" data-active="sky"></nav>
+
+      <main class="ap-main ap-main-globe">
+        <canvas id="globeCanvas" class="ap-globe-canvas"></canvas>
+
+        <div class="ap-footer">
+          Wiki on the Globus — Earth from space, the real sky from your place ·
+          every object opens Wikipedia · your location stays on your device
+        </div>
+      </main>
+
+      <aside class="ap-ads">
+        <div class="ap-ad-slot">ad</div>
+      </aside>
+    </div>
+
+    <script type="module" src="/src/nav.ts"></script>
+    <script type="module" src="/src/sky.ts"></script>
+  </body>
+</html>

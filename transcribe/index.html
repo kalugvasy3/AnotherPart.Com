@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Transcriber — hear speech, read it, look words up | AnotherPart</title>
+    <meta
+      name="description"
+      content="On-device transcription tools: turn speech into text you can read and replay, with dictionary help on tap. Fully offline, no sign-in." />
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <div class="ap-shell">
+      <nav class="ap-nav" data-active="transcriber"></nav>
+
+      <main class="ap-main">
+        <div class="ap-stage">
+          <div class="ap-page-title">Transcriber</div>
+          <p class="ap-page-sub">
+            turn speech into text you can read, replay and look up · fully
+            on-device · pick a tool
+          </p>
+
+          <a class="ap-tool-card" href="/transcribe/notes/">
+            <div class="ap-tool-name"><span class="ap-tool-dot" style="background:#72bbff"></span>Listening notes · Whisper</div>
+            <div class="ap-tool-line">
+              hear speech and read it — on-device Whisper, detects the language
+              itself · replay any line · tap a word for a dictionary hint ·
+              <span class="ap-plus">+ accurate, fully offline</span> ·
+              <span class="ap-minus">− a moment per phrase, one-time
+              download</span>
+            </div>
+          </a>
+
+          <a class="ap-tool-card" href="/transcribe/live/">
+            <div class="ap-tool-name"><span class="ap-tool-dot" style="background:#7ee2a8"></span>Live captions · streaming</div>
+            <div class="ap-tool-line">
+              text appears AS you speak — Chrome's Web Speech, otherwise offline
+              Vosk · pick the spoken language ·
+              <span class="ap-plus">+ instant, live</span> ·
+              <span class="ap-minus">− fixed language (no auto-detect); Chrome
+              is online</span>
+            </div>
+          </a>
+        </div>
+
+        <div class="ap-footer">
+          © AnotherPart · feedback on
+          <a href="https://www.youtube.com/@AnotherPartMe" rel="noopener">YouTube</a>
+        </div>
+      </main>
+
+      <aside class="ap-ads">
+        <div class="ap-ad-slot">ad</div>
+      </aside>
+    </div>
+
+    <script type="module" src="/src/nav.ts"></script>
+  </body>
+</html>

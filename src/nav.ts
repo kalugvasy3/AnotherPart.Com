@@ -13,12 +13,20 @@ const ITEMS: Array<{
   label: string;
   href: string;
   soon?: boolean;
+  // Optional dropdown-only text (the corner brand keeps `label`). For
+  // the globe the Earth symbol replaces the word «Globus» in the menu.
+  menuLabel?: string;
 }> = [
   { id: 'home', label: 'AnotherPart', href: '/' },
   { id: 'translators', label: 'Translators', href: '/translate/' },
-  { id: 'calls', label: 'Video Calls', href: '#', soon: true },
-  { id: 'sky', label: 'Sky', href: '#', soon: true },
-  { id: 'transcriber', label: 'Transcriber', href: '#', soon: true }
+  { id: 'transcriber', label: 'Transcriber', href: '/transcribe/' },
+  { id: 'calls', label: 'VideoCall', href: '#', soon: true },
+  {
+    id: 'sky',
+    label: 'Wiki on the Globus',
+    href: '/sky/',
+    menuLabel: 'Wiki on the 🌍'
+  }
 ];
 
 const nav = document.querySelector<HTMLElement>('.ap-nav');
@@ -36,6 +44,8 @@ if (nav) {
 
   trigger.type = 'button';
   trigger.className = 'ap-brand-neon';
+  // The corner brand is the NEON name (Vasily, 2026-07-20: «верни
+  // неоновую надпись»); the Earth symbol lives in the dropdown item.
   trigger.textContent = `${active.label} ▾`;
   menuWrap.appendChild(trigger);
 
@@ -53,11 +63,13 @@ if (nav) {
       link.classList.add('ap-cat-active');
     }
 
+    const shown = item.menuLabel ?? item.label;
+
     if (item.soon) {
       link.classList.add('ap-cat-soon');
-      link.textContent = `${item.label} · soon`;
+      link.textContent = `${shown} · soon`;
     } else {
-      link.textContent = item.label;
+      link.textContent = shown;
       link.href = item.href;
     }
 
@@ -78,16 +90,8 @@ if (nav) {
   });
 }
 
-// The neon mark at the top of the CENTER — every screen; click = home.
-const main = document.querySelector<HTMLElement>('.ap-main');
-
-if (main) {
-  const mark = document.createElement('a');
-
-  mark.className = 'ap-brand-neon ap-main-mark';
-  mark.href = '/';
-  mark.textContent = 'AnotherPart';
-  main.prepend(mark);
-}
+// The centre no longer gets its own «AnotherPart» mark (Vasily, 2026-07-20:
+// «и отсюда тоже») — on every page it only duplicated the left menu, whose
+// first item «AnotherPart» already leads home. One brand mark, top-left.
 
 export {};

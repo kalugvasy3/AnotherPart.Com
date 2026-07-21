@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Duplex Translator — both talk, offline (Whisper base) | AnotherPart</title>
+    <meta
+      name="description"
+      content="Both people just talk — no buttons. The language is detected automatically and translated to the other side, fully on your device with Whisper base. Headphones recommended. No internet after the first load, no sign-in." />
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body data-pair="duplex-base">
+    <div class="ap-shell">
+      <nav class="ap-nav" data-active="translators"></nav>
+
+      <main class="ap-main">
+        <div class="ap-stage ap-stage-fill">
+          <div class="ap-duplex">
+            <div id="engineStatus" class="ap-status-muted ap-duplex-status"></div>
+
+            <div id="stream" class="ap-duplex-stream"></div>
+
+            <div class="ap-duplex-bar">
+              <div class="ap-duplex-langs">
+                <select id="langA" class="ap-select"></select>
+                <span class="ap-duplex-swap" aria-hidden="true">⇄</span>
+                <select id="langB" class="ap-select"></select>
+              </div>
+
+              <button id="startPause" class="ap-duplex-start" type="button">
+                Start conversation
+              </button>
+
+              <button id="clearBtn" class="ap-duplex-clear" type="button"
+                title="Clear the conversation" hidden>🗑</button>
+
+              <label class="ap-duplex-speak" title="Speak translations aloud">
+                <input type="checkbox" id="autoSpeak" checked />
+                <span aria-hidden="true">🔊</span>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <div class="ap-footer">
+          duplex · offline — both talk, direction detected automatically ·
+          speech and text NEVER leave your device · headphones recommended ·
+          <a href="/translate/duplex/">other duplex packs</a> ·
+          <a href="/translate/">all translators</a>
+        </div>
+      </main>
+
+      <aside class="ap-ads">
+        <div class="ap-ad-slot">ad</div>
+      </aside>
+    </div>
+
+    <script type="module" src="/src/nav.ts"></script>
+    <script type="module" src="/src/duplex.ts"></script>
+  </body>
+</html>

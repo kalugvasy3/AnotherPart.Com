@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Duplex Translators — both talk, pick a pack | AnotherPart</title>
+    <meta
+      name="description"
+      content="Duplex voice translation: both people just talk and the language is detected automatically. Pick the on-device pack that fits — Whisper base for speed or Whisper small for accuracy. Fully offline, no sign-in." />
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <div class="ap-shell">
+      <nav class="ap-nav" data-active="translators"></nav>
+
+      <main class="ap-main">
+        <div class="ap-stage">
+          <div class="ap-page-title">Duplex — both just talk</div>
+          <p class="ap-page-sub">
+            no buttons: the language is detected automatically and translated
+            to the other side · fully on-device · headphones recommended ·
+            pick the pack that fits
+          </p>
+
+          <a class="ap-tool-card" href="/translate/duplex-base/">
+            <div class="ap-tool-name"><span class="ap-tool-dot" style="background:#ffd36b"></span>Duplex · Whisper base</div>
+            <div class="ap-tool-line">
+              auto-detect on Whisper base + Marian ·
+              <span class="ap-plus">+ faster, lighter, on-device</span> ·
+              <span class="ap-minus">− ~80 MB one-time, accents may trip
+              detection</span>
+            </div>
+          </a>
+
+          <a class="ap-tool-card" href="/translate/duplex-small/">
+            <div class="ap-tool-name"><span class="ap-tool-dot" style="background:#ff9d5c"></span>Duplex · Whisper small · high accuracy</div>
+            <div class="ap-tool-line">
+              auto-detect on the larger Whisper small + Marian ·
+              <span class="ap-plus">+ best accuracy, handles hard terms and
+              names</span> ·
+              <span class="ap-minus">− bigger ~250 MB, slower per phrase</span>
+            </div>
+          </a>
+        </div>
+
+        <div class="ap-footer">
+          © AnotherPart · <a href="/translate/">all translators</a> · feedback
+          on
+          <a href="https://www.youtube.com/@AnotherPartMe" rel="noopener">YouTube</a>
+        </div>
+      </main>
+
+      <aside class="ap-ads">
+        <div class="ap-ad-slot">ad</div>
+      </aside>
+    </div>
+
+    <script type="module" src="/src/nav.ts"></script>
+  </body>
+</html>
