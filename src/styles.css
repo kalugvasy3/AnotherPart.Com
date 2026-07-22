@@ -1581,6 +1581,90 @@ select {
   box-shadow: 0 0 18px rgba(255, 200, 90, 0.35) !important;
 }
 
+/* PUBLIC AUTO-WORLDS — direct from the intersecting-triangles icon.
+   User worlds are deliberately absent in .Com; this menu starts with
+   the live observatory layer and keeps the future institutions visible. */
+.ap-public-worlds-group {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.ap-public-worlds-menu {
+  position: absolute;
+  top: calc(100% + 10px);
+  left: 50%;
+  z-index: 9500;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  width: 140px;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid rgba(255, 214, 130, 0.45);
+  border-radius: 12px;
+  background: rgba(3, 8, 16, 0.92);
+  box-shadow:
+    0 8px 24px rgba(0, 0, 0, 0.55),
+    0 0 14px rgba(255, 200, 90, 0.1);
+  transform: translateX(-50%);
+  transform-origin: top center;
+  animation: ap-public-worlds-menu-unfold 0.17s ease-out;
+}
+
+.ap-public-worlds-menu[hidden] {
+  display: none;
+}
+
+.ap-public-worlds-menu .ap-sky-coord.ap-sky-worlds-filter {
+  min-width: 0;
+  height: 34px;
+  padding: 0 10px;
+  font-size: 12px;
+  cursor: pointer;
+  opacity: 0.72;
+}
+
+.ap-public-worlds-menu .ap-sky-worlds-filter.ap-sky-view-on {
+  opacity: 1;
+}
+
+.ap-entry-asleep {
+  opacity: 0.32 !important;
+  filter: saturate(0.25) !important;
+  box-shadow: none !important;
+  cursor: default !important;
+}
+
+.ap-entry-asleep:hover {
+  opacity: 0.45 !important;
+  border-color: rgba(160, 190, 225, 0.4) !important;
+  box-shadow: none !important;
+}
+
+@keyframes ap-public-worlds-menu-unfold {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(-10px) scaleY(0.7);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0) scaleY(1);
+  }
+}
+
+.ap-sky-dock-ghost .ap-public-worlds-group .ap-constellation-button,
+.ap-sky-dock-ghost .ap-public-worlds-menu {
+  opacity: 0.1 !important;
+  box-shadow: none !important;
+  transition: opacity 0.35s ease;
+}
+
+.ap-sky-dock-ghost .ap-public-worlds-group .ap-constellation-button:hover {
+  opacity: 0.22 !important;
+}
+
 .ap-constellation-button svg {
   display: block;
   width: 100%;
@@ -1604,4 +1688,106 @@ select {
 .ap-constellation-mode-1,
 .ap-constellation-mode-2 {
   opacity: 0.7;
+}
+
+/* Ground-only position controls, copied from the .Me sky dock. */
+.ap-sky-coord.ap-sky-walk {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 60px;
+  height: 60px;
+  padding: 6px;
+}
+
+.ap-sky-walk svg {
+  display: block;
+  width: 40px;
+  height: 40px;
+}
+
+.ap-sky-dock .ap-sky-coord.ap-sky-height {
+  flex-direction: column;
+  gap: 0;
+  padding: 4px 6px;
+}
+
+.ap-sky-dock .ap-sky-coord.ap-sky-height svg {
+  width: 30px;
+  height: 30px;
+}
+
+.ap-sky-height-km {
+  font-size: 10px;
+  line-height: 1;
+  opacity: 0.85;
+}
+
+/* The local sky finder uses the same compact dock grammar as .Me. */
+.ap-sky-finder-group {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ap-sky-finder-search-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.ap-sky-finder-search {
+  width: 228px;
+  padding: 9px 12px;
+  border: 1px solid rgba(120, 230, 255, 0.35);
+  border-radius: 10px;
+  background: rgba(7, 18, 30, 0.9);
+  color: rgba(228, 246, 255, 0.94);
+  font: 600 12px Consolas, monospace;
+  outline: none;
+}
+
+.ap-sky-finder-search:focus {
+  border-color: rgba(140, 235, 255, 0.7);
+  box-shadow: 0 0 14px rgba(80, 210, 255, 0.25);
+}
+
+.ap-sky-finder-search::placeholder {
+  color: rgba(160, 215, 235, 0.55);
+}
+
+.ap-sky-finder-menu {
+  position: absolute;
+  top: calc(100% + 10px);
+  left: 0;
+  z-index: 9500;
+  width: 310px;
+  max-height: min(60vh, 440px);
+  overflow-y: auto;
+  padding: 8px;
+  border: 1px solid rgba(120, 230, 255, 0.42);
+  border-radius: 10px;
+  background: rgba(5, 14, 25, 0.96);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.48);
+  scrollbar-width: thin;
+  scrollbar-color: rgba(120, 230, 255, 0.35) rgba(10, 24, 38, 0.5);
+}
+
+.ap-sky-finder-dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: rgba(150, 165, 180, 0.4);
+  align-self: center;
+}
+
+.ap-sky-finder-dot-high {
+  background: rgb(64, 226, 138);
+  box-shadow: 0 0 7px rgba(64, 226, 138, 0.85);
+}
+
+.ap-sky-finder-dot-low {
+  background: rgba(64, 226, 138, 0.55);
+  box-shadow: 0 0 4px rgba(64, 226, 138, 0.35);
 }

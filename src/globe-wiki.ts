@@ -14,6 +14,13 @@ export type WikiSummary = {
   url?: string;
 };
 
+/** A Wikipedia page that has a primary coordinate on Earth. */
+export type EarthSearchResult = {
+  title: string;
+  latDeg: number;
+  lonDeg: number;
+};
+
 export class GlobeWiki {
   private readonly starWikiCache = new Map<
     string,
@@ -325,6 +332,79 @@ export class GlobeWiki {
     }
 
     return cached;
+  }
+
+  /** Place search for the orbit finder. One MediaWiki generator request
+   *  returns matching main-namespace pages together with their coordinates;
+   *  pages without an Earth coordinate never reach the UI. */
+  public async searchEarth(
+    query: string,
+    signal?: AbortSignal
+  ): Promise<EarthSearchResult[]> {
+    const term = query.trim();
+
+    if (term.length < 3) {
+      return [];
+    }
+
+    const response = await fetch(
+      'https://en.wikipedia.org/w/api.php?action=query&generator=search' +
+        `&gsrsearch=${encodeURIComponent(term)}` +
+        '&gsrnamespace=0&gsrlimit=12' +
+        '&prop=coordinates&colimit=1&format=json&origin=*',
+      { signal }
+    );
+
+    if (!response.ok) {
+      throw new Error(`wikipedia search ${response.status}`);
+    }
+
+    const data = (await response.json()) as {
+      query?: {
+        pages?: Record<
+          string,
+          {
+            title?: string;
+            index?: number;
+            coordinates?: Array<{
+              lat?: number;
+              lon?: number;
+              globe?: string;
+              primary?: string;
+            }>;
+          }
+        >;
+      };
+    };
+
+    return Object.values(data.query?.pages ?? {})
+      .map((page) => {
+        const coordinate = (page.coordinates ?? []).find(
+          (item) =>
+            item.globe === 'earth' &&
+            Number.isFinite(item.lat) &&
+            Number.isFinite(item.lon)
+        );
+
+        if (!page.title || !coordinate) {
+          return null;
+        }
+
+        return {
+          title: page.title,
+          latDeg: coordinate.lat!,
+          lonDeg: coordinate.lon!,
+          index: page.index ?? Number.MAX_SAFE_INTEGER
+        };
+      })
+      .filter(
+        (
+          item
+        ): item is EarthSearchResult & { index: number } => item !== null
+      )
+      .sort((a, b) => a.index - b.index)
+      .slice(0, 8)
+      .map(({ title, latDeg, lonDeg }) => ({ title, latDeg, lonDeg }));
   }
 
   private async searchWikiCitySummary(

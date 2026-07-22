@@ -1,5 +1,5 @@
 /**
- * WIKI ON THE GLOBUS — Stage 1 (Vasily, 2026-07-20).
+ * WIKI ON THE GLOBUS — local Earth and sky stage.
  *
  * Built AROUND the .Me astronomy math and ported VERBATIM (Angular/API/DB
  * stripped, everything else identical — «один в один это закон»):
@@ -10,8 +10,10 @@
  *    procedural deep-zoom detail layer) — NOT a flat material;
  *  - the Sun is the real subsolar direction.
  *
- * Stage 1 = Earth from space, centred on the viewer's geolocation
- * (Greenwich/equator if unknown). Stars, planets, surface, Wikipedia next.
+ * Earth starts in orbit, centred on the viewer's geolocation
+ * (Greenwich/equator if unknown). The same local scene also supports
+ * standing above the selected surface point, sky instruments and
+ * Wikipedia cards — no .Me server state is involved.
  */
 
 import {
@@ -41,7 +43,11 @@ import {
 } from '@babylonjs/core';
 
 import { GlobeController } from './globe-controller';
-import { GlobeWiki, type WikiSummary } from './globe-wiki';
+import {
+  GlobeWiki,
+  type EarthSearchResult,
+  type WikiSummary
+} from './globe-wiki';
 import { ASTERISM_FIGURES } from './celestial/asterism-lines';
 import { CITY_LABELS } from './celestial/city-labels.catalog';
 import type { CelestialStarDefinition } from './celestial/celestial-environment';
@@ -69,6 +75,11 @@ const engine = new Engine(canvas, true, {
   stencil: true,
   antialias: true
 });
+
+// Billboarded sky objects must inherit skyRoot's sidereal rotation. Without
+// this Babylon keeps Saturn's plane (and other billboards) in the unrotated
+// frame while the finder and tracking use the rotated celestial frame.
+TransformNode.BillboardUseParentOrientation = true;
 
 const scene = new Scene(engine);
 scene.clearColor = new Color4(2 / 255, 6 / 255, 14 / 255, 1);
@@ -415,7 +426,6 @@ function updateSun(): void {
 }
 
 updateSun();
-window.setInterval(updateSun, 60_000);
 
 // ---- Star field + sky rotation (verbatim from .Me) ----------------
 // Stars live on a `skyRoot` TransformNode that turns with sidereal time
@@ -423,9 +433,10 @@ window.setInterval(updateSun, 60_000);
 
 const STAR_FIELD_RADIUS = 60;
 const starHitPoints: { position: Vector3; star: CelestialStarDefinition }[] = [];
+let starField: PointsCloudSystem | null = null;
 
 const skyRoot = new TransformNode('sky-root', scene);
-const skyRotationBaseGmstHours = sunPosition.getGmstHours(new Date());
+let skyRotationBaseGmstHours = sunPosition.getGmstHours(new Date());
 
 function getStarColor(star: CelestialStarDefinition): Color4 {
   const magnitude = Number(star.magnitude);
@@ -504,6 +515,7 @@ async function createStarField(): Promise<void> {
     mesh.material.pointSize = 3;
   }
 
+  starField = pcs;
   mesh.parent = skyRoot;
 }
 
@@ -512,11 +524,22 @@ void createStarField();
 // ---- Bright-star name labels (verbatim from .Me) ------------------
 // Proper-named stars brighter than the limit (plus Polaris by right)
 // carry a bluish name label parented to skyRoot, so it tracks the sky.
-// The TELESCOPE tier (~1800 faint names revealed on zoom) is COMMENTED
-// PORT-LATER — it needs updateTelescopeStarLabels + the star pool.
+// A lazy telescope tier reveals fainter names and designations as the
+// field of view narrows.
 
 const brightStarLabelMagLimit = 1.65;
 const brightStarLabelMeshes: Mesh[] = [];
+const telescopeStarLabelMeshes: Mesh[] = [];
+let telescopeLabelsAppliedFov: number | null = null;
+let telescopeLabelsAppliedForward: Vector3 | null = null;
+let telescopeLabelsPendingBuild = false;
+const telescopeStarPool: {
+  star: CelestialStarDefinition;
+  kind: 'proper' | 'designation';
+  revealFovRad: number;
+  glow: number;
+  mesh?: Mesh;
+}[] = [];
 
 const STAR_DESIGNATION_RE =
   /^(?:\d|HYG |(?:Alp|Bet|Gam|Del|Eps|Zet|Eta|The|Iot|Kap|Lam|Mu|Nu|Xi|Omi|Pi|Rho|Sig|Tau|Ups|Phi|Chi|Psi|Ome)[\d-]* )/;
@@ -533,6 +556,16 @@ function brightStarLabelStars(): CelestialStarDefinition[] {
       // orientation star — named by right, not by magnitude.
       (star.id === 'polaris' ||
         star.magnitude <= brightStarLabelMagLimit) &&
+      starHasProperName(star)
+  );
+}
+
+function telescopeStarLabelStars(): CelestialStarDefinition[] {
+  return VISIBLE_STAR_CATALOG.filter(
+    (star) =>
+      star.id !== 'sol' &&
+      star.id !== 'polaris' &&
+      star.magnitude > brightStarLabelMagLimit &&
       starHasProperName(star)
   );
 }
@@ -662,20 +695,59 @@ function createBrightStarLabels(scene: Scene): void {
     brightStarLabelMeshes.push(plane);
   }
 
-  // PORT-LATER: TELESCOPE tier — the lazy staircase of ~1800 faint
-  // proper-name + designation labels revealed by zoom. Needs the
-  // telescopeStarPool build here plus updateTelescopeStarLabels(fov)
-  // in the render pulse (see .Me createBrightStarLabels tail).
+  // Telescope tier: labels are born only once their individual zoom
+  // threshold is crossed, keeping initial memory and draw calls small.
+  const magSpan = 5.2 - brightStarLabelMagLimit;
+
+  telescopeStarPool.push(
+    ...telescopeStarLabelStars()
+      .sort((a, b) => a.magnitude - b.magnitude)
+      .map((star) => ({
+        star,
+        kind: 'proper' as const,
+        revealFovRad:
+          1.37 -
+          ((star.magnitude - brightStarLabelMagLimit) / magSpan) *
+            (1.37 - 0.55),
+        glow: Math.max(0.3, Math.min(1, (5.6 - star.magnitude) / 4))
+      }))
+  );
+
+  for (const star of VISIBLE_STAR_CATALOG) {
+    if (
+      star.id === 'sol' ||
+      star.id === 'polaris' ||
+      star.magnitude <= brightStarLabelMagLimit ||
+      !star.name ||
+      starHasProperName(star)
+    ) {
+      continue;
+    }
+
+    telescopeStarPool.push({
+      star,
+      kind: 'designation' as const,
+      revealFovRad:
+        0.86 -
+        ((star.magnitude - brightStarLabelMagLimit) / magSpan) *
+          (0.86 - 0.52),
+      glow: Math.max(0.25, Math.min(0.8, (5.6 - star.magnitude) / 5))
+    });
+  }
 }
 
 // Labels repositioned live on the same 60s tick as the stars themselves.
 function refreshBrightStarLabels(): void {
   const date = new Date();
-  const byId = new Map(
-    brightStarLabelStars().map((star) => [star.id, star] as const)
-  );
+  const byId = new Map([
+    ...brightStarLabelStars().map((star) => [star.id, star] as const),
+    ...telescopeStarPool.map((entry) => [entry.star.id, entry.star] as const)
+  ]);
 
-  for (const label of brightStarLabelMeshes) {
+  for (const label of [
+    ...brightStarLabelMeshes,
+    ...telescopeStarLabelMeshes
+  ]) {
     const id = (label.metadata as { brightStarId?: string } | undefined)
       ?.brightStarId;
     const star = id ? byId.get(id) : undefined;
@@ -686,8 +758,108 @@ function refreshBrightStarLabels(): void {
   }
 }
 
+function updateTelescopeStarLabels(fovRad: number): void {
+  if (telescopeStarPool.length === 0) {
+    return;
+  }
+
+  let forward = camera.getForwardRay(1).direction.clone().normalize();
+  const rot = skyRoot.rotation.y;
+
+  if (rot !== 0) {
+    forward = Vector3.TransformCoordinates(forward, Matrix.RotationY(-rot));
+  }
+
+  const fovChanged =
+    telescopeLabelsAppliedFov === null ||
+    Math.abs(fovRad - telescopeLabelsAppliedFov) >= 0.0005;
+  const gazeChanged =
+    telescopeLabelsAppliedForward === null ||
+    Vector3.Dot(forward, telescopeLabelsAppliedForward) < 0.99995;
+
+  if (!fovChanged && !gazeChanged && !telescopeLabelsPendingBuild) {
+    return;
+  }
+
+  telescopeLabelsAppliedFov = fovRad;
+  telescopeLabelsAppliedForward = forward.clone();
+
+  const coneCos = Math.cos(Math.min(1.35, fovRad * 0.9 + 0.12));
+  const date = new Date();
+  let builtThisPulse = 0;
+  let pending = false;
+
+  for (const entry of telescopeStarPool) {
+    const revealed = fovRad <= entry.revealFovRad;
+
+    if (!revealed) {
+      if (entry.mesh) {
+        entry.mesh.isVisible = false;
+      }
+      continue;
+    }
+
+    const dir = starSkyLocalDirection(entry.star, date);
+    const inView = Vector3.Dot(dir, forward) >= coneCos;
+
+    if (!entry.mesh) {
+      if (!inView) {
+        continue;
+      }
+
+      if (builtThisPulse >= 48) {
+        pending = true;
+        continue;
+      }
+
+      entry.mesh = createStarNameLabel(
+        scene,
+        entry.star,
+        date,
+        entry.kind === 'designation'
+          ? {
+              texWidth: 256,
+              texHeight: 64,
+              fontPx: 18,
+              planeWidth: 1.9,
+              planeHeight: 0.48,
+              alpha: 0.3,
+              color: `rgba(168, 192, 224, ${entry.glow.toFixed(3)})`
+            }
+          : {
+              texWidth: 256,
+              texHeight: 64,
+              fontPx: 22,
+              planeWidth: 2.3,
+              planeHeight: 0.58,
+              alpha: 0.3,
+              color: `rgba(140, 205, 255, ${entry.glow.toFixed(3)})`
+            }
+      );
+      entry.mesh.alwaysSelectAsActiveMesh = true;
+      telescopeStarLabelMeshes.push(entry.mesh);
+      builtThisPulse++;
+    }
+
+    entry.mesh.isVisible = inView;
+
+    if (inView) {
+      const depth = Math.max(
+        0,
+        Math.min(
+          1,
+          (entry.revealFovRad / Math.max(fovRad, 0.0001) - 1) / 0.5
+        )
+      );
+
+      (entry.mesh.material as StandardMaterial).alpha = 0.3 + 0.7 * depth;
+    }
+  }
+
+  telescopeLabelsPendingBuild = pending;
+}
+
 createBrightStarLabels(scene);
-window.setInterval(refreshBrightStarLabels, 60_000);
 
 // ---- Sun disc + «SUN» label (verbatim; sunspots are a later step) --
 
@@ -1009,8 +1181,7 @@ applySunSpotsTexture(scene);
 // ---- Solar-system bodies (verbatim from .Me globe-stage) -----------
 // Moon, planets and Saturn's rings as textured spheres, each lit by its
 // OWN sun-direction light (honest phases); Galilean moons as a line of
-// four dots. Ported one-to-one; the un-portable telescope faint-star
-// tier is COMMENTED with a PORT-LATER note for a quick uncomment.
+// four dots. Telescope star names share this layer's per-frame zoom pulse.
 
 // True IAU rotation poles [RA°, Dec°] — the texture axis aims here.
 const PLANET_POLE_RADEC: Partial<Record<string, [number, number]>> = {
@@ -1036,6 +1207,7 @@ const SOLAR_BODY_STYLE: Record<string, { color: [number, number, number] }> = {
 const SOLAR_BODY_MIN_RADIUS_PX = 3;
 
 const solarBodyMeshes: Mesh[] = [];
+const solarSystemNodes: TransformNode[] = [];
 const solarBodyHits: { position: Vector3; body: SolarBodySky }[] = [];
 const solarBodyLights: DirectionalLight[] = [];
 
@@ -1053,7 +1225,7 @@ function createMoonMesh(
   const material = new StandardMaterial('solar-body-mat-moon', scene);
 
   material.diffuseTexture = new Texture(
-    'assets/celestial/lroc_color_2k.jpg',
+    '/assets/celestial/lroc_color_2k.jpg',
     scene
   );
   material.specularColor = new Color3(0, 0, 0);
@@ -1089,8 +1261,7 @@ function createMoonMesh(
 
 /** Textured planet spheres. Jupiter — the Cassini map (NASA/JPL
  *  PIA07782), Mars — the Viking MDIM mosaic, Mercury — MESSENGER MDIS.
- *  Venus is a featureless cloud ball, so her texture is drawn by hand —
- *  but the SPHERE gives her honest phases from the sun light. */
+ *  Venus is its familiar high cloud deck rather than a red radar surface. */
 function createTexturedPlanetMesh(
   scene: Scene,
   id: 'jupiter' | 'mars' | 'venus' | 'mercury'
@@ -1102,18 +1273,17 @@ function createTexturedPlanetMesh(
   );
   const material = new StandardMaterial(`solar-body-mat-${id}`, scene);
 
-  if (id === 'venus') {
-    material.diffuseTexture = createVenusCloudTexture(scene);
-  } else {
-    material.diffuseTexture = new Texture(
-      id === 'jupiter'
-        ? 'assets/celestial/PIA07782.jpg'
-        : id === 'mars'
-          ? 'assets/celestial/mars_viking_4k.jpg'
-          : 'assets/celestial/mercury_messenger_clrmosaic_global_1024.jpg',
-      scene
-    );
-  }
+  material.diffuseTexture =
+    id === 'venus'
+      ? createVenusCloudTexture(scene)
+      : new Texture(
+          id === 'jupiter'
+            ? '/assets/celestial/PIA07782.jpg'
+            : id === 'mars'
+              ? '/assets/celestial/mars_viking_4k.jpg'
+              : '/assets/celestial/mercury_messenger_clrmosaic_global_1024.jpg',
+          scene
+        );
 
   material.specularColor = new Color3(0, 0, 0);
   material.diffuseColor = new Color3(1, 1, 1);
@@ -1132,7 +1302,9 @@ function createTexturedPlanetMesh(
   return mesh;
 }
 
-/** Venus: soft cream cloud bands, hand-drawn. */
+/** Venus is permanently hidden by its bright cloud deck. This is the
+ * approved visible-light treatment from .Me, not the red Magellan radar
+ * surface map. */
 function createVenusCloudTexture(scene: Scene): DynamicTexture {
   const texture = new DynamicTexture(
     'solar-body-tex-venus',
@@ -1145,8 +1317,6 @@ function createVenusCloudTexture(scene: Scene): DynamicTexture {
   ctx.fillStyle = '#f0e4c4';
   ctx.fillRect(0, 0, 512, 256);
 
-  // Gentle chevron bands — the Y-shaped cloud pattern Venus is known
-  // for, abstracted to a few soft strokes.
   const bands = [
     { y: 40, tone: 'rgba(214, 196, 158, 0.5)', height: 26 },
     { y: 92, tone: 'rgba(224, 205, 164, 0.55)', height: 34 },
@@ -1185,12 +1355,10 @@ function createVenusCloudTexture(scene: Scene): DynamicTexture {
   }
 
   texture.update();
-
   return texture;
 }
 
-/** Saturn WITH its rings at the honest opening angle. Back half → ball
- *  with faint bands → front half, classic occlusion. */
+/** Saturn with rings at the ephemeris opening angle. */
 function createSaturnMesh(scene: Scene, body: SolarBodySky): Mesh {
   const texture = new DynamicTexture(
     'solar-body-tex-saturn',
@@ -1214,15 +1382,14 @@ function createSaturnMesh(scene: Scene, body: SolarBodySky): Mesh {
   const outerRy = outerRx * squash;
   const innerRy = innerRx * squash;
 
-  ctx.clearRect(0, 0, 256, 256);
-
   const annulusPath = (): void => {
     ctx.beginPath();
     ctx.ellipse(cx, cy, outerRx, outerRy, 0, 0, Math.PI * 2);
     ctx.ellipse(cx, cy, innerRx, innerRy, 0, 0, Math.PI * 2);
   };
 
-  // Back half of the rings (behind the ball).
+  ctx.clearRect(0, 0, 256, 256);
+
   ctx.save();
   ctx.beginPath();
   ctx.rect(0, 0, 256, cy);
@@ -1232,7 +1399,6 @@ function createSaturnMesh(scene: Scene, body: SolarBodySky): Mesh {
   ctx.fill('evenodd');
   ctx.restore();
 
-  // The ball with faint bands.
   ctx.beginPath();
   ctx.arc(cx, cy, planetR, 0, Math.PI * 2);
   ctx.fillStyle = 'rgba(240, 224, 180, 0.98)';
@@ -1248,7 +1414,6 @@ function createSaturnMesh(scene: Scene, body: SolarBodySky): Mesh {
   ctx.fillRect(cx - planetR, cy + 10, planetR * 2, 7);
   ctx.restore();
 
-  // Front half of the rings (over the ball) + a Cassini-division hint.
   ctx.save();
   ctx.beginPath();
   ctx.rect(0, cy, 256, 128);
@@ -1301,7 +1466,8 @@ function createSaturnMesh(scene: Scene, body: SolarBodySky): Mesh {
 function createGalileanMoonDots(
   scene: Scene,
   jupiter: SolarBodySky,
-  date: Date
+  date: Date,
+  jupiterSystem: TransformNode
 ): void {
   const moons = computeGalileanMoons(date);
   const jd = sunPosition.directionFromRaDec(
@@ -1358,7 +1524,6 @@ function createGalileanMoonDots(
     material.specularColor = new Color3(0, 0, 0);
     material.disableLighting = true;
     mesh.material = material;
-    mesh.position = position;
     mesh.billboardMode = Mesh.BILLBOARDMODE_ALL;
     mesh.isPickable = false;
     mesh.renderingGroupId = 0;
@@ -1369,7 +1534,8 @@ function createGalileanMoonDots(
       // Callisto's orbit spans ±26.4 R_J — the whole system's width.
       galileanSystemSpreadRad: 26.4 * jupAngRad
     };
-    mesh.parent = skyRoot;
+    mesh.parent = jupiterSystem;
+    mesh.position.copyFrom(position.subtract(jupiterSystem.position));
 
     solarBodyMeshes.push(mesh);
     solarBodyHits.push({
@@ -1389,6 +1555,7 @@ function createGalileanMoonDots(
 function createSolarSystemBodies(scene: Scene): void {
   const date = new Date();
   const bodies = computeSolarSystemSky(date);
+  let jupiterSystem: TransformNode | null = null;
 
   for (const body of bodies) {
     const style = SOLAR_BODY_STYLE[body.id];
@@ -1444,7 +1611,10 @@ function createSolarSystemBodies(scene: Scene): void {
       bodyMesh.material = material;
     }
 
-    bodyMesh.position = position;
+    // Keep the ephemeris hit position independent from the mesh. Jupiter is
+    // re-parented below and its LOCAL position becomes zero; assigning the
+    // same Vector3 object here also zeroed the finder/tracking coordinate.
+    bodyMesh.position.copyFrom(position);
     bodyMesh.billboardMode = Mesh.BILLBOARDMODE_ALL;
 
     if (
@@ -1616,11 +1786,25 @@ function createSolarSystemBodies(scene: Scene): void {
     label.billboardMode = Mesh.BILLBOARDMODE_ALL;
     label.isPickable = false;
     label.renderingGroupId = 0;
-    // BELOW the body, not across it.
-    label.position = position.add(new Vector3(0, -0.85, 0));
+    // Jupiter and its moons share one local celestial system. The root
+    // carries that whole system every rendered frame; individual satellites
+    // only supply their offset within it.
+    let parent: TransformNode = skyRoot;
 
-    bodyMesh.parent = skyRoot;
-    label.parent = bodyMesh.parent;
+    if (body.id === 'jupiter') {
+      jupiterSystem = new TransformNode('jupiter-system', scene);
+      jupiterSystem.parent = skyRoot;
+      jupiterSystem.position.copyFrom(position);
+      solarSystemNodes.push(jupiterSystem);
+      parent = jupiterSystem;
+      bodyMesh.position.setAll(0);
+      label.position = new Vector3(0, -0.85, 0);
+    } else {
+      label.position = position.add(new Vector3(0, -0.85, 0));
+    }
+
+    bodyMesh.parent = parent;
+    label.parent = parent;
 
     solarBodyMeshes.push(bodyMesh, label);
     solarBodyHits.push({ position, body });
@@ -1628,8 +1812,8 @@ function createSolarSystemBodies(scene: Scene): void {
 
   const jupiter = bodies.find((b) => b.id === 'jupiter');
 
-  if (jupiter) {
-    createGalileanMoonDots(scene, jupiter, date);
+  if (jupiter && jupiterSystem) {
+    createGalileanMoonDots(scene, jupiter, date, jupiterSystem);
   }
 
   updateSolarBodyScales();
@@ -1640,9 +1824,7 @@ function createSolarSystemBodies(scene: Scene): void {
 function updateSolarBodyScales(): void {
   const fov = controller.angleViewCamera;
 
-  // PORT-LATER: telescope faint-star names not ported yet — uncomment
-  // once updateTelescopeStarLabels is brought over from .Me.
-  // updateTelescopeStarLabels(fov);
+  updateTelescopeStarLabels(fov);
 
   const floorRad =
     (SOLAR_BODY_MIN_RADIUS_PX / Math.max(1, canvas.clientHeight)) * fov;
@@ -1729,6 +1911,171 @@ function updateSkyRotation(): void {
   const wrapped = ((((dHours + 12) % 24) + 24) % 24) - 12;
   skyRoot.rotation.y = (wrapped * 15 * Math.PI) / 180;
 }
+
+// ---- Live sky refresh (synchronized with .Me) --------------------
+// The renderer rotates the celestial sphere smoothly every frame.  Once a
+// minute .Me recomputes every time-dependent element in a fresh frame, then
+// sets that frame as the new zero.  Keeping this together prevents the Sun,
+// planets and their moons from accumulating transforms in different frames.
+function refreshStarFieldPositions(): void {
+  if (!starField) {
+    return;
+  }
+
+  const date = new Date();
+  const stars = VISIBLE_STAR_CATALOG;
+
+  starHitPoints.length = 0;
+  starField.updateParticle = (particle: CloudPoint): CloudPoint => {
+    const star = stars[particle.idx];
+
+    if (star) {
+      const direction = sunPosition.directionFromRaDec(
+        star.raHours * 15,
+        star.decDeg,
+        controller.shiftLongDeg,
+        controller.shiftLatDeg,
+        date
+      );
+
+      particle.position.set(
+        direction.x * STAR_FIELD_RADIUS,
+        direction.y * STAR_FIELD_RADIUS,
+        direction.z * STAR_FIELD_RADIUS
+      );
+      particle.color = getStarColor(star);
+      starHitPoints.push({ position: particle.position, star });
+    }
+
+    return particle;
+  };
+  starField.setParticles();
+}
+
+function refreshConstellationAndAsterismLines(): void {
+  if (constellationLinesMesh) {
+    MeshBuilder.CreateLineSystem(
+      'constellation-lines',
+      {
+        lines: buildConstellationLinePointSets(),
+        colors: buildConstellationLineColorSets(hoveredConstellationId),
+        instance: constellationLinesMesh
+      },
+      scene
+    );
+  }
+
+  if (asterismLinesMesh) {
+    MeshBuilder.CreateLineSystem(
+      'asterism-lines',
+      {
+        lines: buildAsterismLinePointSets(),
+        colors: buildAsterismLineColorSets(hoveredConstellationId),
+        instance: asterismLinesMesh
+      },
+      scene
+    );
+  }
+}
+
+function refreshConstellationLabels(): void {
+  const date = new Date();
+
+  for (const label of constellationLabelMeshes) {
+    const id = (label.metadata as { constellationId?: string } | undefined)
+      ?.constellationId;
+    const figure = id
+      ? CONSTELLATION_FIGURES.find((item) => item.id === id)
+      : undefined;
+
+    if (!figure) {
+      continue;
+    }
+
+    let sx = 0;
+    let sy = 0;
+    let sz = 0;
+    let count = 0;
+
+    for (const polyline of figure.lines) {
+      for (const vertex of polyline) {
+        const direction = sunPosition.directionFromRaDec(
+          vertex[0],
+          vertex[1],
+          controller.shiftLongDeg,
+          controller.shiftLatDeg,
+          date
+        );
+
+        sx += direction.x;
+        sy += direction.y;
+        sz += direction.z;
+        count++;
+      }
+    }
+
+    if (count > 0) {
+      const length = Math.hypot(sx, sy, sz) || 1;
+      label.position.copyFromFloats(
+        (sx / length) * constellationRadius,
+        (sy / length) * constellationRadius,
+        (sz / length) * constellationRadius
+      );
+    }
+  }
+}
+
+function refreshConstellationHoverData(): void {
+  constellationVertexHits.length = 0;
+  buildConstellationHoverData();
+
+  if (hoveredConstellationId) {
+    const current = hoveredConstellationId;
+    hoveredConstellationId = null;
+    setHoveredConstellation(current);
+  }
+}
+
+function refreshSolarSystemBodies(): void {
+  for (const mesh of solarBodyMeshes) {
+    mesh.material?.dispose(false, true);
+    mesh.dispose();
+  }
+
+  for (const light of solarBodyLights) {
+    light.dispose();
+  }
+
+  for (const node of solarSystemNodes) {
+    node.dispose();
+  }
+
+  solarBodyMeshes.length = 0;
+  solarSystemNodes.length = 0;
+  solarBodyHits.length = 0;
+  solarBodyLights.length = 0;
+  createSolarSystemBodies(scene);
+}
+
+function refreshSky(): void {
+  updateSun();
+  refreshStarFieldPositions();
+  refreshConstellationAndAsterismLines();
+  refreshConstellationLabels();
+  refreshBrightStarLabels();
+  refreshConstellationHoverData();
+  refreshMeteorRadiants();
+  refreshSolarSystemBodies();
+
+  skyRotationBaseGmstHours = sunPosition.getGmstHours(new Date());
+  skyRoot.rotation.y = 0;
+
+  if (skyTrackingEnabled) {
+    rebuildSkyAnchorMarker(new Date());
+  }
+}
+
+window.setInterval(refreshSky, 60_000);
 
 // ---- Constellation + asterism lines (verbatim from .Me) -----------
 
@@ -2459,7 +2806,7 @@ function findNearestSolarBodyAtScreenPoint(
   for (const hit of solarBodyHits) {
     const projected = Vector3.Project(
       hit.position,
-      skyRoot?.getWorldMatrix() ?? Matrix.Identity(),
+      skyRoot.getWorldMatrix(),
       transform,
       viewport
     );
@@ -2922,6 +3269,126 @@ function handleStarCardClick(e: PointerEvent): boolean {
 
 createStarCard();
 
+// ---- Earth Finder --------------------------------------------------
+// The orbit counterpart of the sky finder: a single selected Wikipedia
+// place gets one small local marker, never a growing collection of pins.
+
+let earthSearchMarker: Mesh | null = null;
+let earthSearchPin: LinesMesh | null = null;
+let earthSearchTravelSeq = 0;
+
+function clearEarthSearchMarker(): void {
+  earthSearchMarker?.material?.dispose(false, true);
+  earthSearchMarker?.dispose();
+  earthSearchPin?.dispose();
+  earthSearchMarker = null;
+  earthSearchPin = null;
+}
+
+function markEarthSearchResult(result: EarthSearchResult): void {
+  clearEarthSearchMarker();
+
+  const n = controller.latLonNormal(result.latDeg, result.lonDeg);
+  const normal = new Vector3(n.x, n.y, n.z);
+  const marker = MeshBuilder.CreateSphere(
+    'earth-search-marker',
+    { diameter: 1, segments: 8 },
+    scene
+  );
+  const material = new StandardMaterial('earth-search-marker-mat', scene);
+
+  material.emissiveColor = new Color3(0.55, 0.9, 1.0);
+  material.diffuseColor = new Color3(0, 0, 0);
+  material.specularColor = new Color3(0, 0, 0);
+  material.disableLighting = true;
+  marker.material = material;
+  marker.position = normal.scale(RENDER_EARTH_RADIUS * 1.00031);
+  marker.scaling.setAll(0.00075);
+  marker.isPickable = false;
+  earthSearchMarker = marker;
+
+  const pin = MeshBuilder.CreateLines(
+    'earth-search-pin',
+    {
+      points: [
+        normal.scale(RENDER_EARTH_RADIUS * 1.00002),
+        marker.position.clone()
+      ]
+    },
+    scene
+  );
+  pin.color = new Color3(0.55, 0.9, 1.0);
+  pin.alpha = 1;
+  pin.isPickable = false;
+  earthSearchPin = pin;
+}
+
+function earthSearchCardMeta(result: EarthSearchResult): string {
+  const lat = `${Math.abs(result.latDeg).toFixed(2)}°${
+    result.latDeg >= 0 ? 'N' : 'S'
+  }`;
+  const lon = `${Math.abs(result.lonDeg).toFixed(2)}°${
+    result.lonDeg >= 0 ? 'E' : 'W'
+  }`;
+
+  return `Wikipedia place · ${lat} ${lon}`;
+}
+
+async function openEarthSearchCard(result: EarthSearchResult): Promise<void> {
+  const seq = ++starCardRequestSeq;
+  const wiki = await globeWiki.fetchWikiSummaryOnce(result.title);
+
+  if (seq !== starCardRequestSeq) {
+    return;
+  }
+
+  showStarCard(
+    earthSearchCardMeta(result),
+    wiki ?? {
+      title: result.title,
+      extract: 'Wikipedia has coordinates for this place, but no summary was available.',
+      url:
+        'https://en.wikipedia.org/w/index.php?search=' +
+        encodeURIComponent(result.title)
+    },
+    undefined,
+    0,
+    Math.round(canvas.clientWidth * 0.58),
+    Math.round(canvas.clientHeight * 0.5)
+  );
+}
+
+function flyToEarthSearchResult(result: EarthSearchResult): void {
+  const travelSeq = ++earthSearchTravelSeq;
+  const from = controller.getCurrentLatLonDeg();
+  const lonDelta = Math.abs(normalizeLonDeg(from.lonDeg - result.lonDeg));
+  const isAlreadyThere =
+    Math.abs(from.latDeg - result.latDeg) < 0.001 && lonDelta < 0.001;
+  const arrive = (): void => {
+    if (travelSeq !== earthSearchTravelSeq) {
+      return;
+    }
+
+    centre(result.latDeg, result.lonDeg);
+    markEarthSearchResult(result);
+    void openEarthSearchCard(result);
+  };
+
+  hideStarCard();
+
+  if (isAlreadyThere) {
+    arrive();
+    return;
+  }
+
+  animateGreatCircle(
+    from,
+    result,
+    (latDeg, lonDeg) => centre(latDeg, lonDeg),
+    arrive
+  );
+}
+
 // ---- Meteor radiants (verbatim from .Me) --------------------------
 // Gold name label + a faint diffuse spindle (the stream Earth crosses)
 // for every shower active today; rebuilt on the 60s tick. Hover → a
@@ -3198,13 +3665,11 @@ function showMeteorTooltip(e: PointerEvent, shower: MeteorShower): void {
 }
 
 createMeteorRadiants(scene);
-window.setInterval(refreshMeteorRadiants, 60_000);
 
 // ---- Earthquakes (verbatim from .Me) ------------------------------
 // The live USGS 2.5-week feed as flat red "saucer" discs on the land,
-// refreshed every 10 min; hover → M, place, time, depth. The ground-
-// view (skyViewActive) branches are omitted — PORT-LATER with surface
-// view. Orbit view only for now.
+// refreshed every 10 min; hover → M, place, time, depth. On the ground
+// the same markers remain visible through the geometric horizon.
 
 type EarthquakeFeature = {
   id?: string;
@@ -3393,6 +3858,10 @@ function updateEarthquakeMarkerScale(): void {
     scale *= Math.max(0.22, Math.sqrt(fov / 0.15));
   }
 
+  if (skyViewActive) {
+    scale *= 0.25;
+  }
+
   // Saucers ride at a FIXED half-kilometer — flat discs, no hugging.
   const lift = RENDER_EARTH_RADIUS * (0.5 / 6371);
 
@@ -3552,13 +4021,21 @@ function findNearestEarthquakeAtScreenPoint(
     const position = mesh.getAbsolutePosition();
     const surfaceNormal = position.clone().normalize();
 
-    // Orbit view: a marker is visible only on the near hemisphere.
-    // PORT-LATER: ground-view (horizon) branch omitted until surface
-    // view arrives.
-    const cameraDirection = cameraPosition.subtract(position).normalize();
+    if (skyViewActive) {
+      const cameraNormal = cameraPosition.clone().normalize();
+      const horizonCos =
+        RENDER_EARTH_RADIUS /
+        Math.max(cameraPosition.length(), RENDER_EARTH_RADIUS + 1e-6);
 
-    if (Vector3.Dot(surfaceNormal, cameraDirection) <= 0) {
-      continue;
+      if (Vector3.Dot(surfaceNormal, cameraNormal) < horizonCos - 0.03) {
+        continue;
+      }
+    } else {
+      const cameraDirection = cameraPosition.subtract(position).normalize();
+
+      if (Vector3.Dot(surfaceNormal, cameraDirection) <= 0) {
+        continue;
+      }
     }
 
     const projected = Vector3.Project(
@@ -3626,12 +4103,12 @@ startEarthquakeUpdates(scene);
 
 // ---- Cities (verbatim from .Me) -----------------------------------
 // 34k GeoNames "embryos" as thin instances of one master plane (a soft
-// mint blob), plus megacity NAME labels (tier 1). Hover → the city name
+// mint blob), plus NAME labels for every million-plus city. Hover → the city name
 // (screen-space hit via a 1° bucket grid); click → a Wikipedia card
-// found by geosearch. The ground-view (skyViewActive) label logic is
-// omitted — PORT-LATER with surface view.
+// found by geosearch. On the ground the nearby cities become small
+// signposts over the horizon, just as they do in the .Me globe.
 
-const cityLabelMeshes: Mesh[] = []; // Megacity NAMES (tier 1 only).
+const cityLabelMeshes: Mesh[] = []; // Million-plus city names in orbit.
 let cityEmbryoMaster: Mesh | undefined;
 // 1°-bucket spatial index for the hover: key → cities in the cell.
 const cityGrid = new Map<
@@ -3684,55 +4161,64 @@ function createCityLabels(scene: Scene): void {
       continue;
     }
 
-    const n = controller.latLonNormal(city.latDeg, city.lonDeg);
-    const position = new Vector3(n.x, n.y, n.z).scale(
-      RENDER_EARTH_RADIUS * 1.004
-    );
-
-    // Megacities also whisper their NAME — small and thin.
-    const texture = new DynamicTexture(
-      `city-label-tex-${city.name}`,
-      { width: 256, height: 64 },
-      scene,
-      false
-    );
-
-    texture.hasAlpha = true;
-
-    const ctx = texture.getContext() as unknown as CanvasRenderingContext2D;
-
-    ctx.clearRect(0, 0, 256, 64);
-    ctx.font = '300 24px "Helvetica Neue", Arial, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.shadowColor = 'rgba(0, 0, 0, 0.9)';
-    ctx.shadowBlur = 5;
-    ctx.fillStyle = 'rgba(206, 220, 238, 0.92)';
-    ctx.fillText(city.name, 128, 32);
-    texture.update();
-
-    const material = new StandardMaterial(`city-label-mat-${city.name}`, scene);
-
-    material.emissiveTexture = texture;
-    material.opacityTexture = texture;
-    material.disableLighting = true;
-    material.diffuseColor = new Color3(0, 0, 0);
-    material.specularColor = new Color3(0, 0, 0);
-
-    const plane = MeshBuilder.CreatePlane(
-      `city-label-${city.name}`,
-      { width: 0.073, height: 0.018 },
-      scene
-    );
-
-    plane.material = material;
-    plane.billboardMode = Mesh.BILLBOARDMODE_ALL;
-    plane.isPickable = false;
-    plane.position = position.scale(1.004);
-    plane.isVisible = false;
-
-    cityLabelMeshes.push(plane);
+    createOrbitCityLabel(scene, city.name, city.latDeg, city.lonDeg);
   }
+}
+
+function createOrbitCityLabel(
+  scene: Scene,
+  name: string,
+  latDeg: number,
+  lonDeg: number
+): void {
+  const n = controller.latLonNormal(latDeg, lonDeg);
+  const position = new Vector3(n.x, n.y, n.z).scale(
+    RENDER_EARTH_RADIUS * 1.004
+  );
+
+  // Million-plus cities also whisper their name — small and thin.
+  const texture = new DynamicTexture(
+    `city-label-tex-${name}`,
+    { width: 256, height: 64 },
+    scene,
+    false
+  );
+
+  texture.hasAlpha = true;
+
+  const ctx = texture.getContext() as unknown as CanvasRenderingContext2D;
+
+  ctx.clearRect(0, 0, 256, 64);
+  ctx.font = '300 24px "Helvetica Neue", Arial, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.shadowColor = 'rgba(0, 0, 0, 0.9)';
+  ctx.shadowBlur = 5;
+  ctx.fillStyle = 'rgba(206, 220, 238, 0.92)';
+  ctx.fillText(name, 128, 32);
+  texture.update();
+
+  const material = new StandardMaterial(`city-label-mat-${name}`, scene);
+
+  material.emissiveTexture = texture;
+  material.opacityTexture = texture;
+  material.disableLighting = true;
+  material.diffuseColor = new Color3(0, 0, 0);
+  material.specularColor = new Color3(0, 0, 0);
+
+  const plane = MeshBuilder.CreatePlane(
+    `city-label-${name}`,
+    { width: 0.073, height: 0.018 },
+    scene
+  );
+
+  plane.material = material;
+  plane.billboardMode = Mesh.BILLBOARDMODE_ALL;
+  plane.isPickable = false;
+  plane.position = position.scale(1.004);
+  plane.isVisible = false;
+
+  cityLabelMeshes.push(plane);
 }
 
 /** 34k embryos in ONE mesh: thin instances lying on the surface like
@@ -3744,7 +4230,9 @@ async function loadCityEmbryos(
   let rows: [string, number, number, number][];
 
   try {
-    const response = await fetch('assets/cities.json');
+    // Vite copies public/ to the site root. A root-relative URL matters
+    // here because this scene itself lives at /sky/.
+    const response = await fetch('/assets/cities.json');
 
     rows = (await response.json()) as [string, number, number, number][];
   } catch {
@@ -3753,6 +4241,22 @@ async function loadCityEmbryos(
 
   if (scene.isDisposed) {
     return;
+  }
+
+  // The city catalog already holds the population in thousands. Reuse it
+  // directly so every city at one million or above receives an orbit label.
+  // The curated wide-orbit names above stay authoritative where they overlap.
+  for (const [name, latDeg, lonDeg, popK] of rows) {
+    const alreadyLabelled = CITY_LABELS.some(
+      (city) =>
+        city.tier === 1 &&
+        Math.abs(city.latDeg - latDeg) < 0.2 &&
+        Math.abs(city.lonDeg - lonDeg) < 0.2
+    );
+
+    if (popK >= 1000 && !alreadyLabelled) {
+      createOrbitCityLabel(scene, name, latDeg, lonDeg);
+    }
   }
 
   // The population knob — thousands; lower it to repopulate small towns.
@@ -3823,8 +4327,7 @@ async function loadCityEmbryos(
 }
 
 function updateCityLabelVisibility(): void {
-  // PORT-LATER: ground view (skyViewActive) once surface view arrives.
-  const labelsShow = cityLabelsEnabled;
+  const labelsShow = cityLabelsEnabled && !skyViewActive;
 
   for (const mesh of cityLabelMeshes) {
     mesh.isVisible = labelsShow;
@@ -3843,7 +4346,188 @@ function isCityLabelsEnabled(): boolean {
 function toggleCityLabels(): void {
   cityLabelsEnabled = !cityLabelsEnabled;
   updateCityLabelVisibility();
-  // PORT-LATER: refreshGroundCityLabels(true) once surface view arrives.
+  refreshGroundCityLabels(true);
+}
+
+// ---- Ground-view city names ----------------------------------------
+// The orbit has its quiet world-wide labels. From the standing view only
+// the local neighbourhood earns labels; all work stays in-browser and
+// uses the already-loaded GeoNames catalogue.
+
+const groundCityLabelMeshes: Mesh[] = [];
+let groundCityLabelsCenter: { latDeg: number; lonDeg: number } | null = null;
+
+function clearGroundCityLabels(): void {
+  for (const mesh of groundCityLabelMeshes) {
+    mesh.material?.dispose(false, true);
+    mesh.dispose();
+  }
+
+  groundCityLabelMeshes.length = 0;
+  groundCityLabelsCenter = null;
+}
+
+function refreshGroundCityLabels(force = false): void {
+  const show =
+    cityLabelsEnabled &&
+    skyViewActive &&
+    skyViewLatLonDeg !== null &&
+    cityGrid.size > 0;
+
+  if (show && !force && groundCityLabelsCenter && skyViewLatLonDeg) {
+    const dLat = Math.abs(groundCityLabelsCenter.latDeg - skyViewLatLonDeg.latDeg);
+    const dLon = Math.abs(groundCityLabelsCenter.lonDeg - skyViewLatLonDeg.lonDeg);
+
+    if (dLat < 1 && (dLon < 1 || dLon > 359)) {
+      return;
+    }
+  }
+
+  clearGroundCityLabels();
+
+  if (!show || !skyViewLatLonDeg) {
+    return;
+  }
+
+  const { latDeg, lonDeg } = skyViewLatLonDeg;
+  groundCityLabelsCenter = { latDeg, lonDeg };
+
+  const hereNormal = controller.latLonNormal(latDeg, lonDeg);
+  const here = new Vector3(hereNormal.x, hereNormal.y, hereNormal.z);
+  const latIdx = Math.floor(latDeg) + 90;
+  const lonIdx = Math.floor(lonDeg) + 180;
+  const candidates: {
+    name: string;
+    position: Vector3;
+    popK: number;
+    dot: number;
+    score: number;
+  }[] = [];
+
+  for (let dLat = -8; dLat <= 8; dLat++) {
+    for (let dLon = -8; dLon <= 8; dLon++) {
+      const key = (latIdx + dLat) * 361 + ((lonIdx + dLon + 361) % 361);
+      const bucket = cityGrid.get(key);
+
+      if (!bucket) {
+        continue;
+      }
+
+      for (const city of bucket) {
+        const dot = Vector3.Dot(city.position.clone().normalize(), here);
+
+        if (dot <= Math.cos((8 * Math.PI) / 180)) {
+          continue;
+        }
+
+        const angleDeg =
+          (Math.acos(Math.min(1, Math.max(-1, dot))) * 180) / Math.PI;
+        candidates.push({
+          ...city,
+          dot,
+          score: city.popK / Math.max(0.7, angleDeg)
+        });
+      }
+    }
+  }
+
+  candidates.sort((a, b) => b.score - a.score);
+
+  const picked: typeof candidates = [];
+  const pickedSep: { normal: Vector3; sepRad: number }[] = [];
+
+  for (const city of candidates) {
+    if (picked.length >= 120) {
+      break;
+    }
+
+    const angleDeg =
+      (Math.acos(Math.min(1, Math.max(-1, city.dot))) * 180) / Math.PI;
+    const sepRad = (Math.max(0.12, 0.18 * angleDeg) * Math.PI) / 180;
+    const normal = city.position.clone().normalize();
+    const overlaps = pickedSep.some(
+      (other) =>
+        Vector3.Dot(normal, other.normal) >
+        Math.cos(Math.max(sepRad, other.sepRad))
+    );
+
+    if (!overlaps) {
+      picked.push(city);
+      pickedSep.push({ normal, sepRad });
+    }
+  }
+
+  for (const city of picked) {
+    const texture = new DynamicTexture(
+      'ground-city-tex-' + city.name,
+      { width: 512, height: 96 },
+      scene,
+      false
+    );
+    texture.hasAlpha = true;
+
+    const ctx = texture.getContext() as unknown as CanvasRenderingContext2D;
+    ctx.clearRect(0, 0, 512, 96);
+    ctx.font = '300 44px "Helvetica Neue", Arial, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.9)';
+    ctx.shadowBlur = 8;
+    ctx.fillStyle = 'rgba(214, 232, 220, 0.95)';
+    ctx.fillText(city.name, 256, 48);
+    texture.update();
+
+    const material = new StandardMaterial(
+      'ground-city-mat-' + city.name,
+      scene
+    );
+    material.emissiveTexture = texture;
+    material.opacityTexture = texture;
+    material.disableLighting = true;
+    material.diffuseColor = new Color3(0, 0, 0);
+    material.specularColor = new Color3(0, 0, 0);
+
+    const plane = MeshBuilder.CreatePlane(
+      'ground-city-' + city.name,
+      { width: 0.035, height: 0.0066, sideOrientation: Mesh.DOUBLESIDE },
+      scene
+    );
+    plane.material = material;
+    plane.isPickable = false;
+    plane.visibility = 0.85;
+    plane.billboardMode = Mesh.BILLBOARDMODE_ALL;
+
+    const normal = city.position.clone().normalize();
+    plane.position = normal.scale(RENDER_EARTH_RADIUS * (1 + 3.6 / 6371));
+
+    const angle = Math.acos(Math.min(1, Math.max(-1, city.dot)));
+    plane.metadata = {
+      groundCityShrink: Math.max(
+        0.3,
+        1 - 0.7 * Math.min(1, angle / ((8 * Math.PI) / 180))
+      )
+    };
+
+    groundCityLabelMeshes.push(plane);
+  }
+}
+
+function updateGroundCityLabelScale(): void {
+  if (!skyViewActive || groundCityLabelMeshes.length === 0) {
+    return;
+  }
+
+  const pxToWorld =
+    controller.angleViewCamera / Math.max(1, canvas.clientHeight);
+
+  for (const mesh of groundCityLabelMeshes) {
+    const shrink =
+      (mesh.metadata as { groundCityShrink?: number } | null)
+        ?.groundCityShrink ?? 1;
+    const dist = Vector3.Distance(camera.position, mesh.position);
+    const worldHeight = 80 * pxToWorld * dist * shrink;
+    mesh.scaling.setAll(worldHeight / 0.0066);
+  }
 }
 
 function findNearestCityAtScreenPoint(
@@ -4036,6 +4720,433 @@ function handleCityCardClick(e: PointerEvent): boolean {
 }
 
 createCityLabels(scene);
+
+// ---- Public auto-worlds · observatories ---------------------------
+// The public branch deliberately has no user worlds in .Com. Its first
+// living category builds astronomical observatories from Wikidata in the
+// visitor's browser, then opens the same Wikipedia card family as cities.
+
+type ObservatoryHit = {
+  name: string;
+  latDeg: number;
+  lonDeg: number;
+  position: Vector3;
+  article: string | null;
+  website: string | null;
+  image: string | null;
+};
+
+type ObservatoryRow = Omit<ObservatoryHit, 'position'>;
+
+const OBSERVATORIES_STORAGE_KEY = 'anotherpart-auto-observatories-v1';
+let observatoriesEnabled = false;
+let observatoriesLoaded = false;
+let observatoriesLoadInFlight = false;
+let observatoryMaster: TransformNode | null = null;
+let observatoryHits: ObservatoryHit[] = [];
+let observatoryBaseSize = 0;
+let observatoryAppliedScale = 0;
+
+function isObservatoriesEnabled(): boolean {
+  return observatoriesEnabled;
+}
+
+function loadObservatoriesState(): void {
+  try {
+    observatoriesEnabled = localStorage.getItem(OBSERVATORIES_STORAGE_KEY) === '1';
+  } catch {
+    observatoriesEnabled = false;
+  }
+}
+
+function isObservatoriesLayerVisible(): boolean {
+  return observatoriesEnabled;
+}
+
+function updateObservatoryMarkersVisibility(): void {
+  const root = observatoryMaster;
+
+  root?.setEnabled(isObservatoriesLayerVisible());
+
+  if (!root || observatoryBaseSize <= 0) {
+    return;
+  }
+
+  const target = observatoryBaseSize * (skyViewActive ? 0.5 : 1);
+
+  if (Math.abs(target - observatoryAppliedScale) < 1e-12) {
+    return;
+  }
+
+  observatoryAppliedScale = target;
+
+  for (const child of root.getChildMeshes()) {
+    child.scaling.setAll(target);
+  }
+}
+
+function toggleObservatoriesLayer(): void {
+  observatoriesEnabled = !observatoriesEnabled;
+
+  try {
+    localStorage.setItem(
+      OBSERVATORIES_STORAGE_KEY,
+      observatoriesEnabled ? '1' : '0'
+    );
+  } catch {
+    // Session-only if storage is unavailable.
+  }
+
+  if (observatoriesEnabled) {
+    void loadObservatoriesOnce();
+  }
+
+  updateObservatoryMarkersVisibility();
+}
+
+async function loadObservatoriesOnce(): Promise<void> {
+  if (observatoriesLoaded || observatoriesLoadInFlight) {
+    return;
+  }
+
+  observatoriesLoadInFlight = true;
+
+  try {
+    const query = [
+      'SELECT ?itemLabel ?coord ?image ?website ?article WHERE {',
+      '  ?item wdt:P31 wd:Q62832; wdt:P625 ?coord.',
+      '  OPTIONAL { ?item wdt:P18 ?image. }',
+      '  OPTIONAL { ?item wdt:P856 ?website. }',
+      '  OPTIONAL { ?article schema:about ?item;',
+      '    schema:isPartOf <https://en.wikipedia.org/>. }',
+      '  SERVICE wikibase:label {',
+      '    bd:serviceParam wikibase:language "en".',
+      '  }',
+      '} LIMIT 1500'
+    ].join('\n');
+
+    const response = await fetch(
+      'https://query.wikidata.org/sparql?format=json&query=' +
+        encodeURIComponent(query),
+      { headers: { Accept: 'application/sparql-results+json' } }
+    );
+
+    if (!response.ok) {
+      throw new Error(`sparql ${response.status}`);
+    }
+
+    const data = (await response.json()) as {
+      results?: { bindings?: Array<Record<string, { value?: string }>> };
+    };
+    const bindings = data.results?.bindings ?? [];
+    const seen = new Set<string>();
+    const rows: ObservatoryRow[] = [];
+
+    for (const row of bindings) {
+      const name = row['itemLabel']?.value ?? '';
+      const point = /Point\(([-\d.]+) ([-\d.]+)\)/.exec(
+        row['coord']?.value ?? ''
+      );
+
+      if (!name || !point) {
+        continue;
+      }
+
+      const lonDeg = Number(point[1]);
+      const latDeg = Number(point[2]);
+      const key = `${name}:${latDeg.toFixed(2)}:${lonDeg.toFixed(2)}`;
+
+      if (!Number.isFinite(latDeg) || !Number.isFinite(lonDeg) || seen.has(key)) {
+        continue;
+      }
+
+      seen.add(key);
+      const articleUrl = row['article']?.value ?? null;
+      const article = articleUrl
+        ? decodeURIComponent(articleUrl.split('/wiki/')[1] ?? '').replace(/_/g, ' ') || null
+        : null;
+
+      rows.push({
+        name,
+        latDeg,
+        lonDeg,
+        article,
+        website: row['website']?.value ?? null,
+        image: row['image']?.value ?? null
+      });
+    }
+
+    if (scene.isDisposed || rows.length === 0) {
+      return;
+    }
+
+    buildObservatoryMarkers(rows);
+    observatoriesLoaded = true;
+  } catch (error) {
+    console.warn('[AP auto-worlds] observatories failed:', error);
+  } finally {
+    observatoriesLoadInFlight = false;
+    updateObservatoryMarkersVisibility();
+  }
+}
+
+function buildObservatoryMarkers(rows: ObservatoryRow[]): void {
+  const material = (
+    name: string,
+    r: number,
+    g: number,
+    b: number,
+    glow: number
+  ): StandardMaterial => {
+    const mat = new StandardMaterial(`obs-${name}`, scene);
+
+    mat.diffuseColor = new Color3(r, g, b);
+    mat.emissiveColor = new Color3(r * glow, g * glow, b * glow);
+    mat.specularColor = new Color3(0.1, 0.1, 0.12);
+
+    return mat;
+  };
+
+  const baseMat = material('base', 0.82, 0.8, 0.75, 0.28);
+  const domeMat = material('dome', 0.88, 0.93, 1.0, 0.42);
+  const slitMat = material('slit', 0.1, 0.14, 0.2, 0.1);
+  const tubeMat = material('tube', 0.75, 0.85, 0.95, 0.3);
+  const lensMat = material('lens', 0.25, 0.55, 0.95, 0.75);
+  const glassMat = material('glass', 0.3, 0.6, 0.95, 0.65);
+  const doorMat = material('door', 0.3, 0.24, 0.2, 0.15);
+
+  const base = MeshBuilder.CreateCylinder(
+    'obs-part-base',
+    { diameter: 1, height: 0.34, tessellation: 16 },
+    scene
+  );
+  base.position.y = 0.17;
+  base.material = baseMat;
+
+  const dome = MeshBuilder.CreateSphere(
+    'obs-part-dome',
+    { diameter: 0.94, segments: 12, slice: 0.5 },
+    scene
+  );
+  dome.position.y = 0.34;
+  dome.material = domeMat;
+
+  const slit = MeshBuilder.CreateBox(
+    'obs-part-slit',
+    { width: 0.1, height: 0.5, depth: 0.4 },
+    scene
+  );
+  slit.position.set(0, 0.45, 0.28);
+  slit.material = slitMat;
+
+  const tube = MeshBuilder.CreateCylinder(
+    'obs-part-tube',
+    { diameter: 0.2, height: 0.34, tessellation: 12 },
+    scene
+  );
+  tube.position.set(0, 0.68, 0.3);
+  tube.rotation.x = (38 * Math.PI) / 180;
+  tube.material = tubeMat;
+
+  const lens = MeshBuilder.CreateCylinder(
+    'obs-part-lens',
+    { diameter: 0.21, height: 0.03, tessellation: 12 },
+    scene
+  );
+  lens.position.set(0, 0.825, 0.413);
+  lens.rotation.x = (38 * Math.PI) / 180;
+  lens.material = lensMat;
+
+  const parts: Mesh[] = [base, dome, slit, tube, lens];
+
+  for (const angleDeg of [-55, -25, 25, 55]) {
+    const angle = (angleDeg * Math.PI) / 180;
+    const window = MeshBuilder.CreateBox(
+      `obs-part-window-${angleDeg}`,
+      { width: 0.11, height: 0.11, depth: 0.03 },
+      scene
+    );
+    window.position.set(
+      Math.sin(angle) * 0.49,
+      0.2,
+      Math.cos(angle) * 0.49
+    );
+    window.rotation.y = angle;
+    window.material = glassMat;
+    parts.push(window);
+  }
+
+  const door = MeshBuilder.CreateBox(
+    'obs-part-door',
+    { width: 0.14, height: 0.22, depth: 0.03 },
+    scene
+  );
+  door.position.set(0, 0.11, 0.49);
+  door.material = doorMat;
+  parts.push(door);
+
+  const master = Mesh.MergeMeshes(parts, true, true, undefined, false, true);
+
+  if (!master) {
+    return;
+  }
+
+  master.name = 'auto-observatories';
+  master.isPickable = false;
+  master.isVisible = false;
+
+  const root = new TransformNode('auto-observatories-root', scene);
+  const size = RENDER_EARTH_RADIUS * ((0.09 * Math.PI) / 180);
+
+  observatoryBaseSize = size;
+  observatoryAppliedScale = size;
+  const yAxis = new Vector3(0, 1, 0);
+  observatoryHits = [];
+
+  rows.forEach((row, index) => {
+    const n = controller.latLonNormal(row.latDeg, row.lonDeg);
+    const normal = new Vector3(n.x, n.y, n.z);
+    const instance = master.createInstance(`obs-${index}`);
+
+    instance.parent = root;
+    instance.isPickable = false;
+    instance.position = normal.scale(RENDER_EARTH_RADIUS * 1.0002);
+    instance.scaling = new Vector3(size, size, size);
+
+    const up = new Quaternion();
+    Quaternion.FromUnitVectorsToRef(yAxis, normal, up);
+    const yaw = Quaternion.RotationAxis(yAxis, index * 2.399963);
+    instance.rotationQuaternion = up.multiply(yaw);
+
+    observatoryHits.push({
+      ...row,
+      position: normal.scale(RENDER_EARTH_RADIUS)
+    });
+  });
+
+  observatoryMaster = root;
+  updateObservatoryMarkersVisibility();
+}
+
+function findObservatoryAtScreenPoint(x: number, y: number): ObservatoryHit | null {
+  if (!isObservatoriesLayerVisible() || observatoryHits.length === 0) {
+    return null;
+  }
+
+  const viewport = camera.viewport.toGlobal(
+    Math.max(1, canvas.clientWidth),
+    Math.max(1, canvas.clientHeight)
+  );
+  const transform = scene.getTransformMatrix();
+  const cameraNormal = camera.position.clone().normalize();
+  const capDeg = skyViewActive ? 15 : 80;
+  const cosLimit = Math.cos((capDeg * Math.PI) / 180);
+  let best: { hit: ObservatoryHit; distancePx: number } | null = null;
+
+  for (const hit of observatoryHits) {
+    const hitNormal = hit.position.clone().normalize();
+
+    if (Vector3.Dot(cameraNormal, hitNormal) < cosLimit) {
+      continue;
+    }
+
+    const projected = Vector3.Project(
+      hit.position,
+      Matrix.Identity(),
+      transform,
+      viewport
+    );
+
+    if (
+      !Number.isFinite(projected.x) ||
+      !Number.isFinite(projected.y) ||
+      projected.z < 0 ||
+      projected.z > 1
+    ) {
+      continue;
+    }
+
+    const topProjected = Vector3.Project(
+      hit.position.add(hitNormal.scale(observatoryAppliedScale)),
+      Matrix.Identity(),
+      transform,
+      viewport
+    );
+    let centerX = projected.x;
+    let centerY = projected.y;
+    let tolerancePx = 16;
+
+    if (Number.isFinite(topProjected.x) && Number.isFinite(topProjected.y)) {
+      const heightPx = Math.hypot(
+        topProjected.x - projected.x,
+        topProjected.y - projected.y
+      );
+      centerX = (projected.x + topProjected.x) / 2;
+      centerY = (projected.y + topProjected.y) / 2;
+      tolerancePx = Math.max(16, heightPx * 0.8 + 8);
+    }
+
+    const distancePx = Math.hypot(centerX - x, centerY - y);
+
+    if (distancePx <= tolerancePx && (!best || distancePx < best.distancePx)) {
+      best = { hit, distancePx };
+    }
+  }
+
+  return best?.hit ?? null;
+}
+
+function handleObservatoryCardClick(e: PointerEvent): boolean {
+  const obs = findObservatoryAtScreenPoint(e.offsetX, e.offsetY);
+
+  if (!obs) {
+    return false;
+  }
+
+  void openObservatoryCard(obs, e.offsetX, e.offsetY);
+  return true;
+}
+
+async function openObservatoryCard(
+  obs: ObservatoryHit,
+  x: number,
+  y: number
+): Promise<void> {
+  const seq = ++starCardRequestSeq;
+  const articleIsUsable = !!obs.article && !/^list of /i.test(obs.article);
+  let wiki = articleIsUsable
+    ? await globeWiki.fetchWikiSummaryOnce(obs.article!)
+    : null;
+
+  if (seq !== starCardRequestSeq) {
+    return;
+  }
+
+  if (!wiki) {
+    wiki = {
+      title: obs.name,
+      extract:
+        'Astronomical observatory — an auto-world built live from open data ' +
+        '(Wikidata). No article on the English Wikipedia yet.',
+      url: obs.website ?? undefined
+    };
+  }
+
+  if (!wiki.thumb && obs.image) {
+    wiki = { ...wiki, thumb: `${obs.image}?width=320` };
+  }
+
+  const meta =
+    `observatory · ${obs.latDeg.toFixed(2)}°, ${obs.lonDeg.toFixed(2)}°` +
+    ' · auto-world · Wikidata';
+
+  showStarCard(meta, wiki, undefined, 0, x, y);
+}
+
+loadObservatoriesState();
+if (observatoriesEnabled) {
+  void loadObservatoriesOnce();
+}
 
 // ---- Double-click "knock" (verbatim from .Me) ---------------------
 // Double-click a 1° cell of the Earth → ask Wikidata what notable
@@ -4915,11 +6026,13 @@ document.addEventListener('pointerdown', (e) => {
   }
 });
 
-/** The detail + deep-zoom gates breathe with the FOV (.Me updateGlobeDetailGate;
- *  no sky view in Stage 1). */
+/** The detail layer is always needed at surface level; orbit still
+ *  wakes it gradually as the camera approaches the Earth. */
 function updateGlobeDetailGate(): void {
   const fov = controller.angleViewCamera;
-  const gate = Math.min(1, Math.max(0, (0.3 - fov) / 0.25));
+  const gate = skyViewActive
+    ? 1
+    : Math.min(1, Math.max(0, (0.3 - fov) / 0.25));
   globeMaterial.setFloat('detailGate', gate);
   const deep = Math.min(1, Math.max(0, (0.055 - fov) / 0.045));
   globeMaterial.setFloat('deepGate', deep);
@@ -5031,6 +6144,13 @@ function canvasSize(): { w: number; h: number } {
 // then the sky hover (stars/planets/constellations). Mirrors .Me
 // updateEarthquakeHover.
 function updateSurfaceHover(e: PointerEvent): void {
+  if (skyViewActive) {
+    hideEarthquakeTooltip();
+    hideCityTooltip();
+    handleSkyHover(e);
+    return;
+  }
+
   const nearest = findNearestEarthquakeAtScreenPoint(e.offsetX, e.offsetY);
 
   if (!nearest) {
@@ -5111,9 +6231,9 @@ const endDrag = (e: PointerEvent): void => {
   }
 
   if (wasClick && e.type === 'pointerup') {
-    // City card first (it sits ON the globe); the sky card refuses
-    // globe hits and falls through.
-    if (!handleCityCardClick(e)) {
+    // Observatory domes are more specific than the city layer; then a
+    // city card sits on the globe while the sky card falls through.
+    if (!handleObservatoryCardClick(e) && !handleCityCardClick(e)) {
       handleStarCardClick(e);
     }
   }
@@ -5168,9 +6288,9 @@ if (navigator.geolocation) {
   );
 }
 
-// ---- Dock actions (verbatim from .Me, orbit branch only) ----------
-// Surface (sky-view) is not ported yet, so the ground branches of
-// flyHome / nudge are PORT-LATER; the orbit branches drive the camera.
+// ---- Dock actions (verbatim from .Me) ------------------------------
+// Home and latitude/longitude controls work in both orbit and surface
+// views; orbit branches drive the camera, surface branches move its point.
 
 let skyFlightActive = false;
 let skyFlightRafId: number | null = null;
@@ -5263,20 +6383,33 @@ function animateGreatCircle(
 // ---- Surface view "stand on the ground" (verbatim core from .Me) ---
 // The camera drops onto the surface point under it and looks at the sky
 // (azimuth/altitude in a local ENU frame). Drag pans the sky, the
-// lat/lon chips travel the standing point, home flies it. PORT-LATER
-// (need their own subsystems): cardinal markers, sky rulers, tracking,
-// finder, ground city labels, the balloon height wheel, gaze persist.
+// lat/lon chips travel the standing point, home flies it. Cardinal markers,
+// sky rulers, tracking, the finder, local city labels, the height wheel and
+// gaze persistence all remain browser-local, with no .Me server state.
 
 let skyViewActive = false;
 let skyViewAzimuthRad = (270 * Math.PI) / 180;
 let skyViewAltitudeRad = (18 * Math.PI) / 180;
+let skyViewGazeLoaded = false;
 let skyViewSurfacePoint = new Vector3(0, 0, 0);
 let skyViewLatLonDeg: { latDeg: number; lonDeg: number } | null = null;
 let skyViewSavedMinZ: number | null = null;
 let skyViewSavedOrbitFov: number | null = null;
 let skyViewOwnFov: number | null = null;
-// One source for the observer height; the balloon wheel is PORT-LATER.
-const skyObserverHeightKm = 10;
+let skyObserverHeightKm = 10;
+const SKY_GAZE_STORAGE_KEY = 'anotherpart-com-sky-gaze-v1';
+
+let skyTrackingEnabled = false;
+let skyTrackingRaDeg = 0;
+let skyTrackingDecDeg = 0;
+let skyAnchorMarkerMesh: LinesMesh | null = null;
+let skyAnchorLocalDir = new Vector3(0, 1, 0);
+
+let skyRulersEnabled = true;
+let skyRulerTopEl: HTMLDivElement | null = null;
+let skyRulerLeftEl: HTMLDivElement | null = null;
+let skyCrosshairEl: HTMLDivElement | null = null;
+const skyCardinalMeshes: Mesh[] = [];
 
 function skyObserverRadiusFactor(): number {
   return 1 + skyObserverHeightKm / 6371;
@@ -5317,7 +6450,10 @@ function skyViewDirection(azimuthRad: number, altitudeRad: number): Vector3 {
 }
 
 function applySkyViewCamera(): void {
-  // PORT-LATER: if (skyTrackingEnabled) applySkyTracking();
+  if (skyTrackingEnabled) {
+    applySkyTracking();
+  }
+
   const { up } = skyViewFrame();
   const viewDirection = skyViewDirection(skyViewAzimuthRad, skyViewAltitudeRad);
 
@@ -5327,7 +6463,8 @@ function applySkyViewCamera(): void {
   camera.fov = controller.angleViewCamera;
 
   updateSolarBodyScales();
-  // PORT-LATER: updateGroundCityLabelScale(); updateSkyRulers();
+  updateGroundCityLabelScale();
+  updateSkyRulers();
   updateGlobeDetailGate();
 }
 
@@ -5347,7 +6484,10 @@ function dragSkyView(dx: number, dy: number, canvasHeight: number): void {
     Math.max((-85 * Math.PI) / 180, skyViewAltitudeRad + dy * radiansPerPixel)
   );
 
-  // PORT-LATER: if (skyTrackingEnabled) anchorSkyTracking();
+  if (skyTrackingEnabled) {
+    anchorSkyTracking();
+  }
+
   applySkyViewCamera();
 }
 
@@ -5356,7 +6496,27 @@ function enterSkyView(): void {
     return;
   }
 
-  // PORT-LATER: restore the remembered gaze (az/alt) from localStorage.
+  if (!skyViewGazeLoaded) {
+    skyViewGazeLoaded = true;
+
+    try {
+      const raw = localStorage.getItem(SKY_GAZE_STORAGE_KEY);
+
+      if (raw) {
+        const gaze = JSON.parse(raw) as { az?: number; alt?: number };
+
+        if (Number.isFinite(gaze.az) && Number.isFinite(gaze.alt)) {
+          skyViewAzimuthRad = gaze.az!;
+          skyViewAltitudeRad = Math.min(
+            (89 * Math.PI) / 180,
+            Math.max((-85 * Math.PI) / 180, gaze.alt!)
+          );
+        }
+      }
+    } catch {
+      // Browser storage is an optional convenience only.
+    }
+  }
 
   // The arrival greets the horizon, never the dirt.
   if (skyViewAltitudeRad < (2 * Math.PI) / 180) {
@@ -5388,8 +6548,10 @@ function enterSkyView(): void {
   skyViewSavedOrbitFov = controller.angleViewCamera;
   controller.angleViewCamera = skyViewOwnFov ?? controller.maxAngleViewCamera;
 
-  // PORT-LATER: createSkyCardinalMarkers(); createSkyRulers();
-  // refreshGroundCityLabels(true); applyHomeMarkerViewMode();
+  createSkyCardinalMarkers();
+  createSkyRulers();
+  updateCityLabelVisibility();
+  refreshGroundCityLabels(true);
   orbitCrosshairEl.style.display = 'none';
   applySkyViewCamera();
 }
@@ -5399,11 +6561,20 @@ function exitSkyView(): void {
     return;
   }
 
-  // PORT-LATER: persist the gaze (az/alt) to localStorage.
+  try {
+    localStorage.setItem(
+      SKY_GAZE_STORAGE_KEY,
+      JSON.stringify({ az: skyViewAzimuthRad, alt: skyViewAltitudeRad })
+    );
+  } catch {
+    // Browser storage is an optional convenience only.
+  }
 
   skyViewActive = false;
   cancelSkyFlight();
-  // PORT-LATER: cancelSkyAim(); skyTrackingEnabled = false;
+  cancelSkyAim();
+  skyTrackingEnabled = false;
+  disposeSkyAnchorMarker();
 
   // The orbit gets its near plane back.
   if (skyViewSavedMinZ !== null) {
@@ -5411,9 +6582,10 @@ function exitSkyView(): void {
     skyViewSavedMinZ = null;
   }
 
-  // PORT-LATER: refreshGroundCityLabels(true); applyHomeMarkerViewMode();
-  // disposeSkyAnchorMarker(); disposeSkyCardinalMarkers();
-  // disposeSkyRulers();
+  refreshGroundCityLabels(true);
+  updateCityLabelVisibility();
+  disposeSkyCardinalMarkers();
+  disposeSkyRulers();
 
   // Remember the ground zoom; give the orbit its own zoom back.
   skyViewOwnFov = controller.angleViewCamera;
@@ -5470,6 +6642,10 @@ function flyHome(): void {
           RENDER_EARTH_RADIUS * skyObserverRadiusFactor()
         );
         applySkyViewCamera();
+      },
+      () => {
+        createSkyCardinalMarkers();
+        refreshGroundCityLabels();
       }
     );
     return;
@@ -5501,6 +6677,8 @@ function nudgeLatLon(dLat: number, dLon: number): void {
     skyViewSurfacePoint = new Vector3(n.x, n.y, n.z).scale(
       RENDER_EARTH_RADIUS * skyObserverRadiusFactor()
     );
+    createSkyCardinalMarkers();
+    refreshGroundCityLabels();
     applySkyViewCamera();
     return;
   }
@@ -5514,6 +6692,811 @@ function nudgeLatLon(dLat: number, dLon: number): void {
     w,
     h
   );
+}
+
+function walkSkyView(stepDeg: number): void {
+  if (!skyViewActive || !skyViewLatLonDeg) {
+    return;
+  }
+
+  cancelSkyFlight();
+
+  const { up, east, north } = skyViewFrame();
+  const heading = north
+    .scale(Math.cos(skyViewAzimuthRad))
+    .add(east.scale(Math.sin(skyViewAzimuthRad)));
+  const delta = (stepDeg * Math.PI) / 180;
+  const normal = up
+    .scale(Math.cos(delta))
+    .add(heading.scale(Math.sin(delta)))
+    .normalize();
+  const latDeg = Math.min(
+    89,
+    Math.max(
+      -89,
+      (Math.asin(Math.min(1, Math.max(-1, normal.y))) * 180) / Math.PI
+    )
+  );
+  const lonDeg = normalizeLonDeg(
+    (Math.atan2(-normal.z, -normal.x) * 180) / Math.PI +
+      controller.shiftLongDeg
+  );
+
+  skyViewLatLonDeg = { latDeg, lonDeg };
+  skyViewSurfacePoint = normal.scale(
+    RENDER_EARTH_RADIUS * skyObserverRadiusFactor()
+  );
+  createSkyCardinalMarkers();
+  refreshGroundCityLabels();
+  applySkyViewCamera();
+}
+
+function adjustSkyObserverHeight(direction: number): void {
+  if (!skyViewActive || !skyViewLatLonDeg) {
+    return;
+  }
+
+  const stepped =
+    direction > 0
+      ? Math.max(skyObserverHeightKm + 1, Math.round(skyObserverHeightKm * 1.04))
+      : Math.min(skyObserverHeightKm - 1, Math.round(skyObserverHeightKm / 1.04));
+  const next = Math.min(100, Math.max(1, stepped));
+
+  if (next === skyObserverHeightKm) {
+    return;
+  }
+
+  skyObserverHeightKm = next;
+  const n = controller.latLonNormal(
+    skyViewLatLonDeg.latDeg,
+    skyViewLatLonDeg.lonDeg
+  );
+  skyViewSurfacePoint = new Vector3(n.x, n.y, n.z).scale(
+    RENDER_EARTH_RADIUS * skyObserverRadiusFactor()
+  );
+  applySkyViewCamera();
+}
+
+// ---- Ground instruments -------------------------------------------
+
+function disposeSkyAnchorMarker(): void {
+  skyAnchorMarkerMesh?.dispose();
+  skyAnchorMarkerMesh = null;
+}
+
+function skyAnchorRadius(): number {
+  return STAR_FIELD_RADIUS * 0.97;
+}
+
+function rebuildSkyAnchorMarker(date: Date): void {
+  const d = sunPosition.directionFromRaDec(
+    skyTrackingRaDeg,
+    skyTrackingDecDeg,
+    controller.shiftLongDeg,
+    controller.shiftLatDeg,
+    date
+  );
+  let direction = new Vector3(d.x, d.y, d.z);
+  const rotation = skyRoot.rotation.y;
+
+  if (rotation !== 0) {
+    direction = Vector3.TransformCoordinates(
+      direction,
+      Matrix.RotationY(-rotation)
+    );
+  }
+
+  skyAnchorLocalDir = direction.clone();
+
+  let u = Vector3.Cross(direction, new Vector3(0, 1, 0));
+  if (u.lengthSquared() < 1e-6) {
+    u = new Vector3(1, 0, 0);
+  } else {
+    u.normalize();
+  }
+
+  const w = Vector3.Cross(direction, u).normalize();
+  const radius = skyAnchorRadius();
+  const gap = 0.003;
+  const arm = 0.009;
+  const center = direction.scale(radius);
+  const segment = (axis: Vector3, sign: number): Vector3[] => [
+    center.add(axis.scale(sign * gap * radius)),
+    center.add(axis.scale(sign * arm * radius))
+  ];
+  const lines = [segment(u, 1), segment(u, -1), segment(w, 1), segment(w, -1)];
+
+  if (skyAnchorMarkerMesh) {
+    MeshBuilder.CreateLineSystem(
+      'sky-anchor-marker',
+      { lines, instance: skyAnchorMarkerMesh },
+      scene
+    );
+    return;
+  }
+
+  const marker = MeshBuilder.CreateLineSystem('sky-anchor-marker', { lines }, scene);
+  marker.color = new Color3(1.0, 0.87, 0.59);
+  marker.alpha = 1;
+  marker.isPickable = false;
+  marker.alwaysSelectAsActiveMesh = true;
+  marker.renderingGroupId = 0;
+  marker.parent = skyRoot;
+  skyAnchorMarkerMesh = marker;
+}
+
+function anchorSkyTracking(): void {
+  const eye = skyViewSurfacePoint;
+  const ray = skyViewDirection(skyViewAzimuthRad, skyViewAltitudeRad);
+  const radius = skyAnchorRadius();
+  const pd = Vector3.Dot(eye, ray);
+  const distance =
+    -pd + Math.sqrt(Math.max(0, pd * pd - eye.lengthSquared() + radius * radius));
+  const direction = eye.add(ray.scale(distance)).normalize();
+  const gmstHours = sunPosition.getGmstHours(new Date());
+  const thetaDeg =
+    (Math.asin(Math.min(1, Math.max(-1, direction.y))) * 180) / Math.PI;
+  const phiDeg = (Math.atan2(-direction.z, -direction.x) * 180) / Math.PI;
+
+  skyTrackingDecDeg = thetaDeg - controller.shiftLatDeg;
+  skyTrackingRaDeg =
+    (((phiDeg + controller.shiftLongDeg + 15 * gmstHours) % 360) + 360) % 360;
+  rebuildSkyAnchorMarker(new Date());
+}
+
+function applySkyTracking(): void {
+  const rotation = skyRoot.rotation.y;
+  const geoDirection =
+    rotation !== 0
+      ? Vector3.TransformCoordinates(skyAnchorLocalDir, Matrix.RotationY(rotation))
+      : skyAnchorLocalDir.clone();
+  const view = geoDirection
+    .scale(skyAnchorRadius())
+    .subtract(skyViewSurfacePoint)
+    .normalize();
+  const { up, east, north } = skyViewFrame();
+  const altitude = Math.asin(
+    Math.min(1, Math.max(-1, Vector3.Dot(view, up)))
+  );
+
+  skyViewAzimuthRad = Math.atan2(
+    Vector3.Dot(view, east),
+    Vector3.Dot(view, north)
+  );
+  skyViewAltitudeRad = Math.min(
+    (89 * Math.PI) / 180,
+    Math.max((-85 * Math.PI) / 180, altitude)
+  );
+}
+
+function toggleSkyTracking(): void {
+  if (!skyViewActive) {
+    return;
+  }
+
+  skyTrackingEnabled = !skyTrackingEnabled;
+  if (skyTrackingEnabled) {
+    anchorSkyTracking();
+  } else {
+    disposeSkyAnchorMarker();
+  }
+}
+
+// ---- Finder: Sun, planets and bright stars -------------------------
+
+type SkyFinderTarget = {
+  kind: 'sun' | 'body' | 'star';
+  id: string;
+  label: string;
+  hint: string;
+  fovRad: number;
+  altDeg?: number | null;
+};
+
+let skyAimRafId: number | null = null;
+
+function cancelSkyAim(): void {
+  if (skyAimRafId !== null) {
+    cancelAnimationFrame(skyAimRafId);
+    skyAimRafId = null;
+  }
+}
+
+function skyFinderWorldPos(target: SkyFinderTarget): Vector3 | null {
+  let localPosition: Vector3 | null = null;
+
+  if (target.kind === 'sun') {
+    localPosition = sunDiscMesh ? sunDiscMesh.position.clone() : null;
+  } else if (target.kind === 'body') {
+    const hit = solarBodyHits.find((item) => item.body.id === target.id);
+    localPosition = hit ? hit.position.clone() : null;
+  } else {
+    const hit = starHitPoints.find((item) => item.star.id === target.id);
+    localPosition = hit?.position.clone() ?? null;
+  }
+
+  if (!localPosition) {
+    return null;
+  }
+
+  const rotation = skyRoot.rotation.y;
+  return rotation !== 0
+    ? Vector3.TransformCoordinates(localPosition, Matrix.RotationY(rotation))
+    : localPosition;
+}
+
+function skyFinderAltitudeDeg(target: SkyFinderTarget): number | null {
+  const position = skyFinderWorldPos(target);
+  if (!position || !skyViewActive) {
+    return null;
+  }
+
+  const direction = position.subtract(skyViewSurfacePoint).normalize();
+  const { up } = skyViewFrame();
+  return (
+    (Math.asin(Math.min(1, Math.max(-1, Vector3.Dot(direction, up)))) * 180) /
+    Math.PI
+  );
+}
+
+function getSkyFinderTargets(): SkyFinderTarget[] {
+  const targets: SkyFinderTarget[] = [
+    {
+      kind: 'sun',
+      id: 'sun',
+      label: 'Sun',
+      hint: 'the star of the day',
+      fovRad: 0.093
+    }
+  ];
+
+  for (const hit of solarBodyHits) {
+    if (
+      hit.body.id === 'io' ||
+      hit.body.id === 'europa' ||
+      hit.body.id === 'ganymede' ||
+      hit.body.id === 'callisto'
+    ) {
+      continue;
+    }
+
+    const angularRad =
+      ((hit.body.angularRadiusDeg ?? 0.002) * Math.PI) / 180;
+    targets.push({
+      kind: 'body',
+      id: hit.body.id,
+      label: hit.body.name,
+      hint: 'solar system',
+      fovRad: Math.min(0.12, Math.max(0.0004, angularRad * 20))
+    });
+  }
+
+  for (const star of brightStarLabelStars()) {
+    targets.push({
+      kind: 'star',
+      id: star.id,
+      label: star.name,
+      hint: star.constellation,
+      fovRad: 0.7
+    });
+  }
+
+  for (const target of targets) {
+    target.altDeg = skyFinderAltitudeDeg(target);
+  }
+
+  return targets;
+}
+
+function searchSkyFinderTargets(query: string): SkyFinderTarget[] {
+  const normalized = query.trim().toLowerCase();
+  if (normalized.length < 3) {
+    return [];
+  }
+
+  const targets = getSkyFinderTargets().filter(
+    (target) =>
+      target.kind !== 'star' && target.label.toLowerCase().includes(normalized)
+  );
+  const stars = VISIBLE_STAR_CATALOG.filter(
+    (star) =>
+      star.id !== 'sol' &&
+      (star.name.toLowerCase().includes(normalized) ||
+        star.constellation.toLowerCase().includes(normalized))
+  )
+    .sort((a, b) => a.magnitude - b.magnitude)
+    .slice(0, 20);
+
+  for (const star of stars) {
+    targets.push({
+      kind: 'star',
+      id: star.id,
+      label: star.name,
+      hint: star.constellation,
+      fovRad: 0.7,
+      altDeg: null
+    });
+  }
+
+  for (const target of targets) {
+    if (target.altDeg === null || target.altDeg === undefined) {
+      target.altDeg = skyFinderAltitudeDeg(target);
+    }
+  }
+
+  return targets;
+}
+
+function slewToSkyTarget(target: SkyFinderTarget): void {
+  if (!skyFinderWorldPos(target)) {
+    return;
+  }
+
+  cancelSkyAim();
+  skyTrackingEnabled = false;
+  disposeSkyAnchorMarker();
+
+  const startAzimuth = skyViewAzimuthRad;
+  const startAltitude = skyViewAltitudeRad;
+  const startFov = controller.angleViewCamera;
+  const endFov = target.fovRad;
+  let deltaAzimuth = 0;
+  let endAltitude = startAltitude;
+
+  const refreshDestination = (): void => {
+    const position = skyFinderWorldPos(target);
+    if (!position) {
+      return;
+    }
+
+    const direction = position.subtract(skyViewSurfacePoint).normalize();
+    const { up, east, north } = skyViewFrame();
+    endAltitude = Math.min(
+      (89 * Math.PI) / 180,
+      Math.asin(Math.min(1, Math.max(-1, Vector3.Dot(direction, up))))
+    );
+
+    let delta =
+      Math.atan2(Vector3.Dot(direction, east), Vector3.Dot(direction, north)) -
+      startAzimuth;
+    while (delta > Math.PI) delta -= Math.PI * 2;
+    while (delta < -Math.PI) delta += Math.PI * 2;
+    deltaAzimuth = delta;
+  };
+
+  refreshDestination();
+
+  const wideFov = Math.max(0.55, startFov, endFov);
+  const startLogFov = Math.log(startFov);
+  const wideLogFov = Math.log(wideFov);
+  const endLogFov = Math.log(endFov);
+  const startedAt = performance.now();
+  const durationMs = 2000;
+  const zoomOutEnd = 0.26;
+  const panEnd = 0.72;
+  const smooth = (value: number): number => {
+    const clamped = Math.min(1, Math.max(0, value));
+    return clamped * clamped * (3 - 2 * clamped);
+  };
+
+  const step = (now: number): void => {
+    const progress = Math.min(1, (now - startedAt) / durationMs);
+    refreshDestination();
+
+    const pan = smooth(
+      (progress - zoomOutEnd * 0.6) / (panEnd - zoomOutEnd * 0.6)
+    );
+    skyViewAzimuthRad = startAzimuth + deltaAzimuth * pan;
+    skyViewAltitudeRad =
+      startAltitude + (endAltitude - startAltitude) * pan;
+
+    let logFov: number;
+    if (progress < zoomOutEnd) {
+      logFov =
+        startLogFov +
+        (wideLogFov - startLogFov) * smooth(progress / zoomOutEnd);
+    } else if (progress < panEnd) {
+      logFov = wideLogFov;
+    } else {
+      logFov =
+        wideLogFov +
+        (endLogFov - wideLogFov) *
+          smooth((progress - panEnd) / (1 - panEnd));
+    }
+
+    controller.angleViewCamera = Math.exp(logFov);
+    applySkyViewCamera();
+
+    if (progress < 1) {
+      skyAimRafId = requestAnimationFrame(step);
+      return;
+    }
+
+    skyAimRafId = null;
+    skyViewOwnFov = controller.angleViewCamera;
+    skyTrackingEnabled = true;
+    anchorSkyTracking();
+    applySkyViewCamera();
+  };
+
+  skyAimRafId = requestAnimationFrame(step);
+}
+
+function aimSkyAt(target: SkyFinderTarget): void {
+  if (!skyViewActive) {
+    enterSkyView();
+  }
+
+  const position = skyFinderWorldPos(target);
+  if (!position) {
+    return;
+  }
+
+  const direction = position.subtract(skyViewSurfacePoint).normalize();
+  const { up } = skyViewFrame();
+  const aboveHorizon =
+    Math.asin(Math.min(1, Math.max(-1, Vector3.Dot(direction, up)))) > 0.01;
+
+  if (aboveHorizon) {
+    slewToSkyTarget(target);
+    return;
+  }
+
+  cancelSkyAim();
+
+  const subPoint = position.clone().normalize();
+  const current = skyViewSurfacePoint.clone().normalize();
+  const angle = Math.acos(
+    Math.min(1, Math.max(-1, Vector3.Dot(subPoint, current)))
+  );
+  const keepAngle = (50 * Math.PI) / 180;
+  const ratio = angle > 1e-6 ? Math.min(1, keepAngle / angle) : 0;
+  const sinAngle = Math.sin(angle) || 1;
+  const landing = subPoint
+    .scale(Math.sin((1 - ratio) * angle) / sinAngle)
+    .add(current.scale(Math.sin(ratio * angle) / sinAngle))
+    .normalize();
+  const latDeg =
+    (Math.asin(Math.min(1, Math.max(-1, landing.y))) * 180) / Math.PI;
+  const lonDeg = normalizeLonDeg(
+    (Math.atan2(-landing.z, -landing.x) * 180) / Math.PI +
+      controller.shiftLongDeg
+  );
+
+  if (!skyViewLatLonDeg) {
+    return;
+  }
+
+  animateGreatCircle(
+    skyViewLatLonDeg,
+    { latDeg, lonDeg },
+    (nextLat, nextLon, nextDirection) => {
+      skyViewLatLonDeg = { latDeg: nextLat, lonDeg: nextLon };
+      skyViewSurfacePoint = nextDirection.scale(
+        RENDER_EARTH_RADIUS * skyObserverRadiusFactor()
+      );
+      applySkyViewCamera();
+    },
+    () => {
+      createSkyCardinalMarkers();
+      refreshGroundCityLabels();
+      slewToSkyTarget(target);
+    }
+  );
+}
+
+function createSkyRulers(): void {
+  if (skyRulerTopEl || !skyRulersEnabled) {
+    return;
+  }
+
+  const parent = tooltipParent;
+  if (!parent) {
+    return;
+  }
+
+  const top = document.createElement('div');
+  Object.assign(top.style, {
+    position: 'absolute',
+    left: '0',
+    right: '0',
+    top: '0',
+    height: '34px',
+    overflow: 'hidden',
+    pointerEvents: 'none',
+    zIndex: '14',
+    fontFamily: 'Consolas, monospace',
+    background: 'linear-gradient(180deg, rgba(3, 8, 16, 0.6), rgba(3, 8, 16, 0))',
+    transition: 'opacity 0.25s ease'
+  });
+
+  const left = document.createElement('div');
+  Object.assign(left.style, {
+    position: 'absolute',
+    left: '0',
+    top: '0',
+    bottom: '0',
+    width: '92px',
+    overflow: 'hidden',
+    pointerEvents: 'none',
+    zIndex: '14',
+    fontFamily: 'Consolas, monospace',
+    background: 'linear-gradient(90deg, rgba(3, 8, 16, 0.6), rgba(3, 8, 16, 0) 65%)'
+  });
+
+  const crosshair = document.createElement('div');
+  Object.assign(crosshair.style, {
+    position: 'absolute',
+    left: '50%',
+    top: '50%',
+    pointerEvents: 'none',
+    zIndex: '14',
+    fontFamily: 'Consolas, monospace'
+  });
+  crosshair.innerHTML =
+    '<div style="position:absolute;left:-42px;top:-1px;width:27px;height:2px;background:rgba(255,224,150,0.85);"></div>' +
+    '<div style="position:absolute;left:15px;top:-1px;width:27px;height:2px;background:rgba(255,224,150,0.85);"></div>' +
+    '<div style="position:absolute;left:-1px;top:-42px;width:2px;height:27px;background:rgba(255,224,150,0.85);"></div>' +
+    '<div style="position:absolute;left:-1px;top:15px;width:2px;height:27px;background:rgba(255,224,150,0.85);"></div>' +
+    '<div data-role="coords" style="position:absolute;left:22px;top:-32px;white-space:nowrap;font-size:15px;font-weight:700;color:rgba(255,224,150,0.96);text-shadow:0 0 7px rgba(0,0,0,0.95);"></div>';
+
+  parent.append(top, left, crosshair);
+  skyRulerTopEl = top;
+  skyRulerLeftEl = left;
+  skyCrosshairEl = crosshair;
+}
+
+function disposeSkyRulers(): void {
+  skyRulerTopEl?.remove();
+  skyRulerLeftEl?.remove();
+  skyCrosshairEl?.remove();
+  skyRulerTopEl = null;
+  skyRulerLeftEl = null;
+  skyCrosshairEl = null;
+}
+
+function toggleSkyRulers(): void {
+  skyRulersEnabled = !skyRulersEnabled;
+
+  if (!skyRulersEnabled) {
+    disposeSkyRulers();
+  } else if (skyViewActive) {
+    createSkyRulers();
+    updateSkyRulers();
+  }
+}
+
+const SKY_CARDINAL_NAMES = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+
+function formatSkyAngle(deg: number, signed: boolean): string {
+  const fovDeg = (camera.fov * 180) / Math.PI;
+  const sign = deg < 0 ? '−' : signed ? '+' : '';
+  const absolute = Math.abs(deg);
+
+  if (fovDeg > 4) {
+    return sign + Math.round(absolute) + '°';
+  }
+
+  if (fovDeg > 0.08) {
+    let whole = Math.floor(absolute);
+    let minutes = Math.round((absolute - whole) * 60);
+    if (minutes === 60) {
+      whole += 1;
+      minutes = 0;
+    }
+    return sign + whole + '°' + String(minutes).padStart(2, '0') + '′';
+  }
+
+  let whole = Math.floor(absolute);
+  let minutes = Math.floor((absolute - whole) * 60);
+  let seconds = Math.round(((absolute - whole) * 60 - minutes) * 60);
+  if (seconds === 60) {
+    minutes += 1;
+    seconds = 0;
+  }
+  if (minutes === 60) {
+    whole += 1;
+    minutes = 0;
+  }
+  return (
+    sign +
+    whole +
+    '°' +
+    String(minutes).padStart(2, '0') +
+    '′' +
+    String(seconds).padStart(2, '0') +
+    '″'
+  );
+}
+
+function updateSkyRulers(): void {
+  const top = skyRulerTopEl;
+  const left = skyRulerLeftEl;
+  if (!top || !left || !skyViewActive) {
+    return;
+  }
+
+  const width = Math.max(1, canvas.clientWidth);
+  const height = Math.max(1, canvas.clientHeight);
+  const viewport = camera.viewport.toGlobal(width, height);
+  const transform = scene.getTransformMatrix();
+  const viewDirection = skyViewDirection(skyViewAzimuthRad, skyViewAltitudeRad);
+  const projectDirection = (
+    azimuth: number,
+    altitude: number
+  ): { x: number; y: number } | null => {
+    const direction = skyViewDirection(azimuth, altitude);
+
+    if (Vector3.Dot(direction, viewDirection) < 0.15) {
+      return null;
+    }
+
+    const projected = Vector3.Project(
+      skyViewSurfacePoint.add(direction.scale(30)),
+      Matrix.Identity(),
+      transform,
+      viewport
+    );
+    if (
+      !Number.isFinite(projected.x) ||
+      !Number.isFinite(projected.y) ||
+      projected.z < 0 ||
+      projected.z > 1
+    ) {
+      return null;
+    }
+    return { x: projected.x, y: projected.y };
+  };
+
+  const altitudeDeg = (skyViewAltitudeRad * 180) / Math.PI;
+  const azimuthDeg =
+    ((((skyViewAzimuthRad * 180) / Math.PI) % 360) + 360) % 360;
+  const wind = SKY_CARDINAL_NAMES[Math.round(azimuthDeg / 45) % 8];
+  top.style.opacity = String(Math.max(0, Math.min(1, (78 - altitudeDeg) / 12)));
+
+  let topHtml = '';
+  for (let azimuth = 0; azimuth < 360; azimuth += 10) {
+    const hit = projectDirection((azimuth * Math.PI) / 180, skyViewAltitudeRad);
+    if (!hit || hit.x < -20 || hit.x > width + 20) {
+      continue;
+    }
+
+    const cardinal = azimuth % 45 === 0;
+    const label = cardinal
+      ? SKY_CARDINAL_NAMES[azimuth / 45]
+      : azimuth % 30 === 0
+        ? String(azimuth) + '°'
+        : '';
+    topHtml +=
+      '<div style="position:absolute;left:' +
+      Math.round(hit.x) +
+      'px;top:0;transform:translateX(-50%);text-align:center;"><div style="width:1px;height:' +
+      (label ? 8 : 5) +
+      'px;margin:0 auto;background:rgba(180,225,255,' +
+      (label ? 0.8 : 0.45) +
+      ');"></div>' +
+      (label
+        ? '<div style="font-size:11px;font-weight:' +
+          (cardinal ? 700 : 400) +
+          ';color:rgba(' +
+          (cardinal ? '255,224,150' : '170,215,245') +
+          ',0.92);">' +
+          label +
+          '</div>'
+        : '') +
+      '</div>';
+  }
+  top.innerHTML =
+    topHtml +
+    '<div style="position:absolute;left:calc(50% + 34px);top:17px;font-size:15px;font-weight:700;color:rgba(255,224,150,0.96);text-shadow:0 0 7px rgba(0,0,0,0.95);">▾ ' +
+    wind +
+    ' ' +
+    formatSkyAngle(azimuthDeg, false) +
+    '</div>';
+
+  let leftHtml = '';
+  for (let altitude = -10; altitude <= 90; altitude += 10) {
+    const hit = projectDirection(
+      skyViewAzimuthRad,
+      (altitude * Math.PI) / 180
+    );
+    if (!hit || hit.y < -20 || hit.y > height + 20) {
+      continue;
+    }
+
+    leftHtml +=
+      '<div style="position:absolute;top:' +
+      Math.round(hit.y) +
+      'px;left:0;transform:translateY(-50%);display:flex;align-items:center;gap:4px;"><div style="width:8px;height:1px;background:rgba(180,225,255,0.7);"></div><div style="font-size:11px;color:rgba(170,215,245,0.92);">' +
+      (altitude > 0 ? '+' : '') +
+      altitude +
+      '°</div></div>';
+  }
+  left.innerHTML =
+    leftHtml +
+    '<div style="position:absolute;top:calc(50% + 26px);left:34px;font-size:15px;font-weight:700;white-space:nowrap;color:rgba(255,224,150,0.96);text-shadow:0 0 7px rgba(0,0,0,0.95);">◂ ' +
+    formatSkyAngle(altitudeDeg, true) +
+    '</div>';
+
+  const coords = skyCrosshairEl?.querySelector('[data-role="coords"]');
+  if (coords instanceof HTMLElement) {
+    coords.textContent =
+      wind +
+      ' ' +
+      formatSkyAngle(azimuthDeg, false) +
+      ' · ' +
+      formatSkyAngle(altitudeDeg, true);
+  }
+}
+
+function createSkyCardinalMarkers(): void {
+  disposeSkyCardinalMarkers();
+
+  const { up, east, north } = skyViewFrame();
+  const distance = 30;
+  const lift = distance * Math.tan((3 * Math.PI) / 180);
+  const directionAt = (deg: number): Vector3 => {
+    const radians = (deg * Math.PI) / 180;
+    return north.scale(Math.cos(radians)).add(east.scale(Math.sin(radians)));
+  };
+
+  for (const [letter, direction] of [
+    ['N', directionAt(0)],
+    ['E', directionAt(90)],
+    ['S', directionAt(180)],
+    ['W', directionAt(270)]
+  ] as const) {
+    const texture = new DynamicTexture(
+      'sky-cardinal-tex-' + letter,
+      { width: 192, height: 128 },
+      scene,
+      false
+    );
+    texture.hasAlpha = true;
+
+    const ctx = texture.getContext() as unknown as CanvasRenderingContext2D;
+    ctx.clearRect(0, 0, 192, 128);
+    ctx.font = 'italic 84px Georgia, "Times New Roman", serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.9)';
+    ctx.shadowBlur = 6;
+    ctx.lineWidth = 2.6;
+    ctx.strokeStyle = 'rgba(190, 235, 255, 0.95)';
+    ctx.strokeText(letter, 96, 64);
+    texture.update();
+
+    const material = new StandardMaterial('sky-cardinal-mat-' + letter, scene);
+    material.diffuseTexture = texture;
+    material.emissiveTexture = texture;
+    material.emissiveColor = new Color3(1, 1, 1);
+    material.useAlphaFromDiffuseTexture = true;
+    material.disableLighting = true;
+    material.backFaceCulling = false;
+    material.specularColor = new Color3(0, 0, 0);
+
+    const plane = MeshBuilder.CreatePlane(
+      'sky-cardinal-' + letter,
+      { width: 3.9, height: 2.6 },
+      scene
+    );
+    plane.material = material;
+    plane.billboardMode = Mesh.BILLBOARDMODE_ALL;
+    plane.isPickable = false;
+    plane.renderingGroupId = 0;
+    plane.position = skyViewSurfacePoint
+      .add(direction.scale(distance))
+      .add(up.scale(lift));
+    skyCardinalMeshes.push(plane);
+  }
+}
+
+function disposeSkyCardinalMarkers(): void {
+  for (const mesh of skyCardinalMeshes) {
+    mesh.material?.dispose(false, true);
+    mesh.dispose();
+  }
+  skyCardinalMeshes.length = 0;
 }
 
 function skyViewLatLabel(): string {
@@ -5533,11 +7516,11 @@ function skyViewLonLabel(): string {
 }
 
 // ---- The sky dock / menu (verbatim structure from .Me) ------------
-// mode (surface) · sky content (constellations, cities) · position
-// (home, lat, lon). Long-press any button to dim the whole group to a
-// ghost; long-press again to wake it. "My Worlds" (Group 5) and the
-// ground-only tools (rulers, tracking, walk) are intentionally NOT
-// included; the surface button's action is PORT-LATER (needs sky view).
+// mode (surface) · sky content (constellations, cities) · ground tools
+// (rulers, tracking) · position (home, road, lat/lon, balloon).
+// Long-press any control to dim the whole group to a ghost; long-press
+// again to wake it. Private user worlds intentionally stay in .Me;
+// public auto-worlds have their own local dock branch below.
 
 let skyButtonsGhost = false;
 let skyLongPressTimer: number | null = null;
@@ -5588,7 +7571,7 @@ function wireDockPress(el: HTMLElement): void {
 const skyDock = document.createElement('div');
 skyDock.className = 'ap-sky-dock';
 
-// GROUP 1 · MODE — stand on the ground (surface). PORT-LATER action.
+// GROUP 1 · MODE — stand on the ground (surface).
 // The icon always shows the DESTINATION: on the ground → go to ORBIT;
 // in orbit → stand on the GROUND.
 const SURFACE_ICON_GROUND =
@@ -5668,6 +7651,41 @@ cityBtn.addEventListener('click', () => {
 });
 wireDockPress(cityBtn);
 
+// GROUP 3 · GROUND TOOLS — only meaningful while standing on the Earth.
+const rulersBtn = document.createElement('button');
+rulersBtn.type = 'button';
+rulersBtn.className = 'ap-constellation-button ap-sky-group-gap';
+rulersBtn.setAttribute(
+  'data-tip',
+  'Ground tools · show the rulers: direction from the north on top, elevation above the horizon on the left'
+);
+rulersBtn.innerHTML =
+  '<svg viewBox="0 0 32 32" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 4 V28" /><path d="M4 6 H28" /><path d="M12 4 v4 M20 4 v4 M28 4 v4" /><path d="M4 12 h4 M4 20 h4 M4 28 h4" /></svg>';
+rulersBtn.addEventListener('click', () => {
+  if (!skyActionBlocked()) {
+    toggleSkyRulers();
+    updateDock();
+  }
+});
+wireDockPress(rulersBtn);
+
+const trackingBtn = document.createElement('button');
+trackingBtn.type = 'button';
+trackingBtn.className = 'ap-constellation-button';
+trackingBtn.setAttribute(
+  'data-tip',
+  'Ground tools · track the point under the crosshair: the camera follows it like a motorized telescope mount'
+);
+trackingBtn.innerHTML =
+  '<svg viewBox="0 0 32 32" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="16" cy="16" r="8" /><circle cx="16" cy="16" r="1.6" fill="currentColor" stroke="none" /><path d="M16 4 v5 M16 23 v5 M4 16 h5 M23 16 h5" /></svg>';
+trackingBtn.addEventListener('click', () => {
+  if (!skyActionBlocked()) {
+    toggleSkyTracking();
+    updateDock();
+  }
+});
+wireDockPress(trackingBtn);
+
 // GROUP 4 · POSITION — fly home + the lat/lon steering chips.
 const homeBtn = document.createElement('button');
 homeBtn.type = 'button';
@@ -5690,6 +7708,27 @@ wireDockPress(homeBtn);
 
 const positionGroup = document.createElement('div');
 positionGroup.className = 'ap-sky-dock-position';
+
+const walkChip = document.createElement('span');
+walkChip.className = 'ap-sky-coord ap-sky-walk';
+walkChip.setAttribute(
+  'data-tip',
+  'Position · the ROAD: hover and SCROLL to walk where the camera looks — up walks forward, down walks back'
+);
+walkChip.innerHTML =
+  '<svg viewBox="0 0 32 32" width="24" height="24" aria-hidden="true" fill="none" stroke="currentColor" stroke-linecap="round"><path d="M6 29 C 13 22, 8.5 14, 15.5 4" stroke-width="2.4" /><path d="M25 29 C 20.5 23, 24 13, 19.5 4.2" stroke-width="2.4" /><path d="M15 28 C 17.5 21, 14.5 12, 17.5 5" stroke-width="1.6" stroke-dasharray="3.4 3" /></svg>';
+walkChip.addEventListener(
+  'wheel',
+  (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!skyButtonsGhost) {
+      walkSkyView(event.deltaY > 0 ? -0.25 : 0.25);
+    }
+  },
+  { passive: false }
+);
+wireDockPress(walkChip);
 
 const latChip = document.createElement('span');
 latChip.className = 'ap-sky-coord';
@@ -5725,14 +7764,445 @@ lonChip.addEventListener('wheel', (e) => onCoordWheel(e, 'lon'), {
 wireDockPress(latChip);
 wireDockPress(lonChip);
 
+const heightChip = document.createElement('span');
+heightChip.className = 'ap-sky-coord ap-sky-walk ap-sky-height ap-sky-group-gap';
+heightChip.setAttribute(
+  'data-tip',
+  'Position · the BALLOON: hover and SCROLL to ride between 1 km (the quake saucers) and 100 km — the Karman line, where space begins'
+);
+heightChip.innerHTML =
+  '<svg viewBox="0 0 32 32" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 3 C10 3 6.5 7.5 6.5 12 C6.5 17.5 12.5 21 14 23.5 L18 23.5 C19.5 21 25.5 17.5 25.5 12 C25.5 7.5 22 3 16 3 Z" /><path d="M14 23.5 L13.4 26 M18 23.5 L18.6 26" /><rect x="13" y="26" width="6" height="3.6" rx="1" /></svg><span class="ap-sky-height-km"></span>';
+heightChip.addEventListener(
+  'wheel',
+  (event) => {
+    event.preventDefault();
+    if (!skyButtonsGhost) {
+      adjustSkyObserverHeight(event.deltaY > 0 ? -1 : 1);
+    }
+  },
+  { passive: false }
+);
+wireDockPress(heightChip);
+
+const finderGroup = document.createElement('div');
+finderGroup.className = 'ap-sky-finder-group ap-sky-group-gap';
+
+const finderSearchWrap = document.createElement('div');
+finderSearchWrap.className = 'ap-sky-finder-search-wrap';
+
+const finderInput = document.createElement('input');
+finderInput.type = 'text';
+finderInput.className = 'ap-sky-finder-search';
+finderInput.placeholder = 'Find in the sky · star or planet name…';
+finderInput.setAttribute(
+  'data-tip',
+  'The finder · Sun, planets, brightest stars — pick one: the view aims itself and starts tracking'
+);
+
+const finderMenu = document.createElement('div');
+finderMenu.className = 'ap-sky-finder-menu';
+finderMenu.hidden = true;
+
+let finderOpen = false;
+
+function renderFinderMenu(): void {
+  finderMenu.replaceChildren();
+  const query = finderInput.value.trim();
+  const targets = query ? searchSkyFinderTargets(query) : getSkyFinderTargets();
+
+  if (query) {
+    const title = document.createElement('div');
+    title.className = 'ap-sky-finder-title';
+    title.textContent = 'Search';
+    finderMenu.appendChild(title);
+  } else {
+    const title = document.createElement('div');
+    title.className = 'ap-sky-finder-title';
+    title.textContent = 'Sun · planets · bright stars';
+    finderMenu.appendChild(title);
+  }
+
+  if (targets.length === 0) {
+    const note = document.createElement('div');
+    note.className = 'ap-sky-finder-note';
+    note.textContent = query ? 'No matching sky object.' : 'Sky catalogue is loading…';
+    finderMenu.appendChild(note);
+    return;
+  }
+
+  for (const target of targets) {
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'ap-sky-finder-item';
+
+    const dot = document.createElement('span');
+    dot.className = 'ap-sky-finder-dot';
+    const altitude = target.altDeg ?? skyFinderAltitudeDeg(target);
+    if (altitude !== null && altitude !== undefined) {
+      if (altitude > 25) {
+        dot.classList.add('ap-sky-finder-dot-high');
+      } else if (altitude > 0) {
+        dot.classList.add('ap-sky-finder-dot-low');
+      }
+    }
+
+    const name = document.createElement('span');
+    name.className = 'ap-sky-finder-name';
+    name.textContent = target.label;
+
+    const hint = document.createElement('span');
+    hint.className = 'ap-sky-finder-hint';
+    hint.textContent =
+      altitude === null || altitude === undefined
+        ? target.hint
+        : altitude > 0
+          ? target.hint + ' · ' + Math.round(altitude) + '° up'
+          : target.hint + ' · below horizon';
+
+    row.append(dot, name, hint);
+    row.addEventListener('click', () => {
+      finderOpen = false;
+      finderMenu.hidden = true;
+      aimSkyAt(target);
+    });
+    finderMenu.appendChild(row);
+  }
+}
+
+finderInput.addEventListener('focus', () => {
+  finderOpen = true;
+  finderMenu.hidden = false;
+  renderFinderMenu();
+});
+finderInput.addEventListener('input', () => {
+  finderOpen = true;
+  finderMenu.hidden = false;
+  renderFinderMenu();
+});
+finderGroup.addEventListener('pointerdown', (event) => event.stopPropagation());
+document.addEventListener('pointerdown', () => {
+  if (finderOpen) {
+    finderOpen = false;
+    finderMenu.hidden = true;
+  }
+});
+
+finderSearchWrap.appendChild(finderInput);
+finderGroup.append(finderSearchWrap, finderMenu);
+
+// ORBIT FINDER · Wikipedia places with Earth coordinates only. It uses
+// the same dock grammar as the sky finder, but never asks the network
+// until the visitor has made an intentional three-character query.
+const earthFinderGroup = document.createElement('div');
+earthFinderGroup.className = 'ap-sky-finder-group ap-sky-group-gap';
+
+const earthFinderSearchWrap = document.createElement('div');
+earthFinderSearchWrap.className = 'ap-sky-finder-search-wrap';
+
+const earthFinderInput = document.createElement('input');
+earthFinderInput.type = 'text';
+earthFinderInput.className = 'ap-sky-finder-search';
+earthFinderInput.placeholder = 'Find on Earth · place or object…';
+earthFinderInput.setAttribute(
+  'data-tip',
+  'Earth finder · type at least 3 characters to search Wikipedia places with coordinates'
+);
+
+const earthFinderMenu = document.createElement('div');
+earthFinderMenu.className = 'ap-sky-finder-menu';
+earthFinderMenu.hidden = true;
+
+let earthFinderOpen = false;
+let earthFinderLoading = false;
+let earthFinderResults: EarthSearchResult[] = [];
+let earthFinderDebounce: number | null = null;
+let earthFinderAbort: AbortController | null = null;
+let earthFinderRequestSeq = 0;
+const earthFinderCache = new Map<string, EarthSearchResult[]>();
+
+function closeEarthFinder(): void {
+  earthFinderOpen = false;
+  earthFinderMenu.hidden = true;
+
+  if (earthFinderDebounce !== null || earthFinderAbort) {
+    clearEarthFinderDebounce();
+    earthFinderAbort?.abort();
+    earthFinderAbort = null;
+    earthFinderRequestSeq++;
+    earthFinderLoading = false;
+  }
+}
+
+function earthFinderQuery(): string {
+  return earthFinderInput.value.trim().replace(/\s+/g, ' ');
+}
+
+function formatEarthFinderCoords(result: EarthSearchResult): string {
+  const lat = `${Math.abs(result.latDeg).toFixed(2)}°${
+    result.latDeg >= 0 ? 'N' : 'S'
+  }`;
+  const lon = `${Math.abs(result.lonDeg).toFixed(2)}°${
+    result.lonDeg >= 0 ? 'E' : 'W'
+  }`;
+
+  return `${lat} · ${lon}`;
+}
+
+function renderEarthFinderMenu(): void {
+  earthFinderMenu.replaceChildren();
+  const query = earthFinderQuery();
+
+  if (query.length < 3) {
+    const note = document.createElement('div');
+    note.className = 'ap-sky-finder-note';
+    note.textContent = 'Type at least 3 characters to search Wikipedia places.';
+    earthFinderMenu.appendChild(note);
+    return;
+  }
+
+  const title = document.createElement('div');
+  title.className = 'ap-sky-finder-title';
+  title.textContent = 'Wikipedia places · coordinates required';
+  earthFinderMenu.appendChild(title);
+
+  if (earthFinderLoading) {
+    const note = document.createElement('div');
+    note.className = 'ap-sky-finder-note';
+    note.textContent = 'Searching…';
+    earthFinderMenu.appendChild(note);
+    return;
+  }
+
+  if (earthFinderResults.length === 0) {
+    const note = document.createElement('div');
+    note.className = 'ap-sky-finder-note';
+    note.textContent = 'No Wikipedia places with Earth coordinates found.';
+    earthFinderMenu.appendChild(note);
+    return;
+  }
+
+  for (const result of earthFinderResults) {
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'ap-sky-finder-item';
+
+    const dot = document.createElement('span');
+    dot.className = 'ap-sky-finder-dot ap-sky-finder-dot-high';
+
+    const name = document.createElement('span');
+    name.className = 'ap-sky-finder-name';
+    name.textContent = result.title;
+
+    const hint = document.createElement('span');
+    hint.className = 'ap-sky-finder-hint';
+    hint.textContent = formatEarthFinderCoords(result);
+
+    row.append(dot, name, hint);
+    row.addEventListener('click', () => {
+      closeEarthFinder();
+      flyToEarthSearchResult(result);
+    });
+    earthFinderMenu.appendChild(row);
+  }
+}
+
+function clearEarthFinderDebounce(): void {
+  if (earthFinderDebounce !== null) {
+    window.clearTimeout(earthFinderDebounce);
+    earthFinderDebounce = null;
+  }
+}
+
+function cacheEarthFinderResults(
+  query: string,
+  results: EarthSearchResult[]
+): void {
+  if (!earthFinderCache.has(query) && earthFinderCache.size >= 40) {
+    const oldest = earthFinderCache.keys().next().value;
+    if (oldest) {
+      earthFinderCache.delete(oldest);
+    }
+  }
+
+  earthFinderCache.set(query, results);
+}
+
+function scheduleEarthFinderSearch(): void {
+  clearEarthFinderDebounce();
+  earthFinderAbort?.abort();
+  earthFinderAbort = null;
+
+  const query = earthFinderQuery();
+  earthFinderResults = [];
+  earthFinderLoading = false;
+  earthFinderOpen = true;
+  earthFinderMenu.hidden = false;
+
+  if (query.length < 3) {
+    renderEarthFinderMenu();
+    return;
+  }
+
+  const cached = earthFinderCache.get(query.toLocaleLowerCase());
+  if (cached) {
+    earthFinderResults = cached;
+    renderEarthFinderMenu();
+    return;
+  }
+
+  const requestSeq = ++earthFinderRequestSeq;
+  earthFinderDebounce = window.setTimeout(() => {
+    earthFinderDebounce = null;
+    const controller = new AbortController();
+    earthFinderAbort = controller;
+    earthFinderLoading = true;
+    renderEarthFinderMenu();
+
+    void globeWiki
+      .searchEarth(query, controller.signal)
+      .then((results) => {
+        if (requestSeq !== earthFinderRequestSeq || controller.signal.aborted) {
+          return;
+        }
+
+        cacheEarthFinderResults(query.toLocaleLowerCase(), results);
+        earthFinderResults = results;
+      })
+      .catch((error: unknown) => {
+        if (
+          requestSeq !== earthFinderRequestSeq ||
+          controller.signal.aborted ||
+          (error instanceof DOMException && error.name === 'AbortError')
+        ) {
+          return;
+        }
+
+        earthFinderResults = [];
+      })
+      .finally(() => {
+        if (requestSeq !== earthFinderRequestSeq) {
+          return;
+        }
+
+        earthFinderLoading = false;
+        earthFinderAbort = null;
+        if (earthFinderOpen) {
+          renderEarthFinderMenu();
+        }
+      });
+  }, 380);
+}
+
+earthFinderInput.addEventListener('focus', () => {
+  if (earthFinderQuery().length > 0) {
+    earthFinderOpen = true;
+    earthFinderMenu.hidden = false;
+    renderEarthFinderMenu();
+  }
+});
+earthFinderInput.addEventListener('input', scheduleEarthFinderSearch);
+earthFinderGroup.addEventListener('pointerdown', (event) => event.stopPropagation());
+document.addEventListener('pointerdown', () => closeEarthFinder());
+
+earthFinderSearchWrap.appendChild(earthFinderInput);
+earthFinderGroup.append(earthFinderSearchWrap, earthFinderMenu);
+
+// GROUP 5 · PUBLIC AUTO-WORLDS. The intersecting triangles go straight
+// to the public catalogue: private user worlds are intentionally absent.
+const publicWorldsGroup = document.createElement('div');
+publicWorldsGroup.className = 'ap-public-worlds-group ap-sky-group-gap';
+
+const publicWorldsBtn = document.createElement('button');
+publicWorldsBtn.type = 'button';
+publicWorldsBtn.className = 'ap-constellation-button';
+publicWorldsBtn.setAttribute(
+  'data-tip',
+  'Public worlds · open the live catalogue: observatories and future public institutions'
+);
+publicWorldsBtn.innerHTML =
+  '<svg viewBox="0 0 32 32" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><polygon points="16,4 27.5,24 4.5,24" /><polygon points="16,28 27.5,8 4.5,8" opacity="0.65" /><circle cx="16" cy="16" r="2" fill="currentColor" stroke="none" /></svg>';
+
+const publicWorldsMenu = document.createElement('div');
+publicWorldsMenu.className = 'ap-public-worlds-menu';
+publicWorldsMenu.hidden = true;
+let publicWorldsOpen = false;
+
+function closePublicWorldsMenu(): void {
+  publicWorldsOpen = false;
+  publicWorldsMenu.hidden = true;
+}
+
+publicWorldsBtn.addEventListener('click', () => {
+  if (skyActionBlocked()) {
+    return;
+  }
+
+  publicWorldsOpen = !publicWorldsOpen;
+  publicWorldsMenu.hidden = !publicWorldsOpen;
+});
+wireDockPress(publicWorldsBtn);
+
+const observatoriesBtn = document.createElement('button');
+observatoriesBtn.type = 'button';
+observatoriesBtn.className = 'ap-sky-coord ap-sky-worlds-filter';
+observatoriesBtn.textContent = 'Observatories';
+observatoriesBtn.setAttribute(
+  'data-tip',
+  'Public auto-worlds · observatories: telescopes built live from Wikidata and Wikipedia in your browser'
+);
+observatoriesBtn.addEventListener('click', () => {
+  if (skyActionBlocked()) {
+    return;
+  }
+
+  toggleObservatoriesLayer();
+  updateDock();
+});
+wireDockPress(observatoriesBtn);
+publicWorldsMenu.appendChild(observatoriesBtn);
+
+for (const [label, tip] of [
+  ['Universities', 'Coming soon · universities, built live from Wikipedia in your browser'],
+  ['Museums', 'Coming soon · museums, built live from Wikipedia in your browser'],
+  ['Exhibitions', 'Coming soon · exhibitions, built live from Wikipedia in your browser'],
+  ['Clinics', 'Coming soon · clinics, built live from Wikipedia in your browser']
+] as const) {
+  const item = document.createElement('button');
+  item.type = 'button';
+  item.className = 'ap-sky-coord ap-sky-worlds-filter ap-entry-asleep';
+  item.textContent = label;
+  item.setAttribute('data-tip', tip);
+  item.addEventListener('click', (event) => event.preventDefault());
+  publicWorldsMenu.appendChild(item);
+}
+
+publicWorldsGroup.append(publicWorldsBtn, publicWorldsMenu);
+publicWorldsGroup.addEventListener('pointerdown', (event) => event.stopPropagation());
+document.addEventListener('pointerdown', (event) => {
+  if (
+    publicWorldsOpen &&
+    event.target instanceof Node &&
+    !publicWorldsGroup.contains(event.target)
+  ) {
+    closePublicWorldsMenu();
+  }
+});
+
+positionGroup.appendChild(walkChip);
 positionGroup.appendChild(latChip);
 positionGroup.appendChild(lonChip);
 
 skyDock.appendChild(surfaceBtn);
 skyDock.appendChild(constellationBtn);
 skyDock.appendChild(cityBtn);
+skyDock.appendChild(rulersBtn);
+skyDock.appendChild(trackingBtn);
 skyDock.appendChild(homeBtn);
 skyDock.appendChild(positionGroup);
+skyDock.appendChild(publicWorldsGroup);
+skyDock.appendChild(heightChip);
+skyDock.appendChild(finderGroup);
+skyDock.appendChild(earthFinderGroup);
 document.body.appendChild(skyDock);
 
 /** Reflect state into the dock: ghost, constellation mode, city on,
@@ -5760,6 +8230,23 @@ function updateDock(): void {
   );
 
   cityBtn.classList.toggle('ap-sky-view-on', isCityLabelsEnabled());
+  publicWorldsBtn.classList.toggle('ap-sky-view-on', isObservatoriesEnabled());
+  observatoriesBtn.classList.toggle('ap-sky-view-on', isObservatoriesEnabled());
+  rulersBtn.classList.toggle('ap-sky-view-on', skyRulersEnabled);
+  trackingBtn.classList.toggle('ap-sky-view-on', skyTrackingEnabled);
+  rulersBtn.style.display = surfaceOn ? '' : 'none';
+  trackingBtn.style.display = surfaceOn ? '' : 'none';
+  walkChip.style.display = surfaceOn ? '' : 'none';
+  heightChip.style.display = surfaceOn ? '' : 'none';
+  finderGroup.style.display = surfaceOn ? '' : 'none';
+  earthFinderGroup.style.display = surfaceOn ? 'none' : '';
+  if (!surfaceOn && finderOpen) {
+    finderOpen = false;
+    finderMenu.hidden = true;
+  }
+  if (surfaceOn && earthFinderOpen) {
+    closeEarthFinder();
+  }
 
   const latText = skyViewLatLabel();
   const lonText = skyViewLonLabel();
@@ -5773,6 +8260,11 @@ function updateDock(): void {
   const traveling = isSkyFlightActive();
   latChip.classList.toggle('ap-sky-coord-traveling', traveling);
   lonChip.classList.toggle('ap-sky-coord-traveling', traveling);
+
+  const heightText = heightChip.querySelector('.ap-sky-height-km');
+  if (heightText) {
+    heightText.textContent = String(skyObserverHeightKm) + ' km';
+  }
 }
 
 updateDock();
@@ -5805,6 +8297,7 @@ engine.runRenderLoop(() => {
   }
 
   updateEarthquakeMarkerScale();
+  updateObservatoryMarkersVisibility();
   updateDock();
   scene.render();
 });
