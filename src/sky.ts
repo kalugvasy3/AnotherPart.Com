@@ -4108,13 +4108,18 @@ startEarthquakeUpdates(scene);
 // found by geosearch. On the ground the nearby cities become small
 // signposts over the horizon, just as they do in the .Me globe.
 
+type CityMarkerInfo = {
+  name: string;
+  position: Vector3;
+  popK: number;
+  latDeg: number;
+  lonDeg: number;
+};
+
 const cityLabelMeshes: Mesh[] = []; // Million-plus city names in orbit.
 let cityEmbryoMaster: Mesh | undefined;
 // 1°-bucket spatial index for the hover: key → cities in the cell.
-const cityGrid = new Map<
-  number,
-  { name: string; position: Vector3; popK: number; latDeg: number; lonDeg: number }[]
->();
+const cityGrid = new Map<number, CityMarkerInfo[]>();
 let cityLabelsEnabled = true;
 let cityTooltipEl: HTMLDivElement | null = null;
 
@@ -4396,13 +4401,7 @@ function refreshGroundCityLabels(force = false): void {
   const here = new Vector3(hereNormal.x, hereNormal.y, hereNormal.z);
   const latIdx = Math.floor(latDeg) + 90;
   const lonIdx = Math.floor(lonDeg) + 180;
-  const candidates: {
-    name: string;
-    position: Vector3;
-    popK: number;
-    dot: number;
-    score: number;
-  }[] = [];
+  const candidates: Array<CityMarkerInfo & { dot: number; score: number }> = [];
 
   for (let dLat = -8; dLat <= 8; dLat++) {
     for (let dLon = -8; dLon <= 8; dLon++) {
@@ -4505,7 +4504,14 @@ function refreshGroundCityLabels(force = false): void {
       groundCityShrink: Math.max(
         0.3,
         1 - 0.7 * Math.min(1, angle / ((8 * Math.PI) / 180))
-      )
+      ),
+      city: {
+        name: city.name,
+        position: city.position,
+        popK: city.popK,
+        latDeg: city.latDeg,
+        lonDeg: city.lonDeg
+      } satisfies CityMarkerInfo
     };
 
     groundCityLabelMeshes.push(plane);
@@ -4530,12 +4536,70 @@ function updateGroundCityLabelScale(): void {
   }
 }
 
+/** In the surface view the cursor normally points at the sky, not at the
+ * globe mesh. Pick the actual nearby signposts in screen space instead of
+ * requiring a ray hit on the Earth behind them. */
+function findNearestGroundCityAtScreenPoint(
+  x: number,
+  y: number
+): CityMarkerInfo | null {
+  const viewport = camera.viewport.toGlobal(
+    Math.max(1, canvas.clientWidth),
+    Math.max(1, canvas.clientHeight)
+  );
+  const transform = scene.getTransformMatrix();
+  let best: { city: CityMarkerInfo; distancePx: number } | null = null;
+
+  for (const mesh of groundCityLabelMeshes) {
+    if (!mesh.isVisible || mesh.visibility === 0) {
+      continue;
+    }
+
+    const metadata = mesh.metadata as { city?: CityMarkerInfo } | null;
+
+    if (!metadata?.city) {
+      continue;
+    }
+
+    const projected = Vector3.Project(
+      mesh.getAbsolutePosition(),
+      Matrix.Identity(),
+      transform,
+      viewport
+    );
+
+    if (
+      !Number.isFinite(projected.x) ||
+      !Number.isFinite(projected.y) ||
+      !Number.isFinite(projected.z) ||
+      projected.z < 0 ||
+      projected.z > 1
+    ) {
+      continue;
+    }
+
+    const distancePx = Math.hypot(projected.x - x, projected.y - y);
+
+    if (!best || distancePx < best.distancePx) {
+      best = { city: metadata.city, distancePx };
+    }
+  }
+
+  // Ground labels are readable signposts, so their hit area is wider than
+  // the small orbital embryo dots.
+  return best && best.distancePx <= 56 ? best.city : null;
+}
+
 function findNearestCityAtScreenPoint(
   x: number,
   y: number
-): { name: string; position: Vector3; popK: number; latDeg: number; lonDeg: number } | null {
+): CityMarkerInfo | null {
   if (!cityLabelsEnabled || cityGrid.size === 0) {
     return null;
+  }
+
+  if (skyViewActive) {
+    return findNearestGroundCityAtScreenPoint(x, y);
   }
 
   const pick = scene.pick(x, y, (mesh) => mesh.name === 'globe');
@@ -4564,13 +4628,7 @@ function findNearestCityAtScreenPoint(
 
   let best:
     | {
-        city: {
-          name: string;
-          position: Vector3;
-          popK: number;
-          latDeg: number;
-          lonDeg: number;
-        };
+        city: CityMarkerInfo;
         distancePx: number;
       }
     | null = null;
@@ -6144,13 +6202,6 @@ function canvasSize(): { w: number; h: number } {
 // then the sky hover (stars/planets/constellations). Mirrors .Me
 // updateEarthquakeHover.
 function updateSurfaceHover(e: PointerEvent): void {
-  if (skyViewActive) {
-    hideEarthquakeTooltip();
-    hideCityTooltip();
-    handleSkyHover(e);
-    return;
-  }
-
   const nearest = findNearestEarthquakeAtScreenPoint(e.offsetX, e.offsetY);
 
   if (!nearest) {
